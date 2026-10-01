@@ -1,0 +1,140 @@
+"""Read-only data API: readings history, dashboard summary and the per-camera
+view (OK/NOK over time)."""
+from __future__ import annotations
+
+import datetime as dt
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.orm import Session
+
+from .. import production
+from ..database import get_db
+from ..dependencies import require_permission
+from ..models import CounterState, Device, Reading, User, utcnow
+
+router = APIRouter(prefix="/api/data", tags=["data"])
+
+# bucket sizes the OK/NOK chart may use, smallest first (seconds)
+_BUCKETS = (60, 300, 600, 900, 1800, 3600, 7200, 10800, 21600, 43200, 86400)
+_MAX_BARS = 72
+
+
+def _aware(t: dt.datetime) -> dt.datetime:
+    return t.replace(tzinfo=dt.timezone.utc) if t.tzinfo is None else t
+
+
+def _device_summary(db: Session, d: Device) -> dict:
+    active = (
+        db.query(CounterState)
+        .filter(CounterState.device_id == d.id, CounterState.is_active.is_(True))
+        .first()
+    )
+    return {
+        "id": d.id,
+        "name": d.name,
+        "protocol": d.protocol,
+        "connected": d.connected,
+        "enabled": d.enabled,
+        "current_job": d.current_job,
+        "last_error": d.last_error,
+        "last_poll_at": d.last_poll_at,
+        **production.describe(d),
+        "active_job": None
+        if active is None
+        else {
+            "job_name": active.job_name,
+            "total_pass": active.total_pass,
+            "total_fail": active.total_fail,
+            "total_count": active.total_count,
+            "scrap_rate": round(active.scrap_rate, 4),
+        },
+    }
+
+
+@router.get("/summary")
+def summary(db: Session = Depends(get_db), _: User = Depends(require_permission("view_dashboard"))):
+    return [_device_summary(db, d) for d in db.query(Device).order_by(Device.name).all()]
+
+
+def ok_nok_buckets(readings: list[Reading], start: dt.datetime, end: dt.datetime, bucket_s: int) -> list[dict]:
+    """OK/NOK parts produced per time bucket.
+
+    Each reading carries the running totals of its job at that moment, so the
+    parts made between two consecutive readings of the same job are the
+    difference of their totals. A job change starts a new baseline (0 parts).
+    ``readings`` must be oldest first; the first one only serves as baseline.
+    """
+    n = max(1, int((end - start).total_seconds() // bucket_s) + 1)
+    first = int(start.timestamp()) // bucket_s * bucket_s
+    bars = [{"t": dt.datetime.fromtimestamp(first + i * bucket_s, dt.timezone.utc), "ok": 0, "nok": 0} for i in range(n)]
+    prev = None
+    for r in readings:
+        if prev is not None and prev.job_name == r.job_name:
+            d_ok = r.total_pass - prev.total_pass
+            d_nok = r.total_fail - prev.total_fail
+            idx = (int(_aware(r.created_at).timestamp()) - first) // bucket_s
+            if 0 <= idx < n:
+                bars[idx]["ok"] += max(d_ok, 0)
+                bars[idx]["nok"] += max(d_nok, 0)
+        prev = r
+    return bars
+
+
+@router.get("/devices/{device_id}")
+def device_view(
+    device_id: int,
+    hours: float = Query(8, gt=0, le=24 * 31),
+    db: Session = Depends(get_db),
+    _: User = Depends(require_permission("view_dashboard")),
+):
+    """Everything the camera view needs: status, totals and OK/NOK over time."""
+    device = db.get(Device, device_id)
+    if not device:
+        raise HTTPException(404, "Device not found")
+    end = utcnow()
+    start = end - dt.timedelta(hours=hours)
+    window = (end - start).total_seconds()
+    bucket_s = next((b for b in _BUCKETS if window / b <= _MAX_BARS), _BUCKETS[-1])
+
+    q = db.query(Reading).filter(Reading.device_id == device_id)
+    baseline = q.filter(Reading.created_at < start).order_by(Reading.created_at.desc()).first()
+    rows = q.filter(Reading.created_at >= start).order_by(Reading.created_at.asc(), Reading.id.asc()).all()
+    bars = ok_nok_buckets(([baseline] if baseline else []) + rows, start, end, bucket_s)
+    return {
+        **_device_summary(db, device),
+        "host": device.host,
+        "port": device.port,
+        "history": {
+            "hours": hours,
+            "bucket_seconds": bucket_s,
+            "bars": bars,
+            "ok": sum(b["ok"] for b in bars),
+            "nok": sum(b["nok"] for b in bars),
+        },
+    }
+
+
+@router.get("/readings")
+def readings(
+    device_id: int | None = None,
+    limit: int = 100,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_permission("view_data")),
+):
+    q = db.query(Reading)
+    if device_id is not None:
+        q = q.filter(Reading.device_id == device_id)
+    rows = q.order_by(Reading.created_at.desc()).limit(min(limit, 1000)).all()
+    return [
+        {
+            "id": r.id,
+            "device_id": r.device_id,
+            "job_name": r.job_name,
+            "raw_pass": r.raw_pass,
+            "raw_fail": r.raw_fail,
+            "total_pass": r.total_pass,
+            "total_fail": r.total_fail,
+            "created_at": r.created_at,
+        }
+        for r in rows
+    ]

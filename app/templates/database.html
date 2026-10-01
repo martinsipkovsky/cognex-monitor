@@ -1,0 +1,212 @@
+{% extends "base.html" %}
+{% block title %}Database · Cognex Monitor{% endblock %}
+{% block content %}
+<div class="toolbar">
+  <div><h1>Database</h1><p class="lead">Which PostgreSQL database the app stores its data in. Administrators only.</p></div>
+</div>
+
+<div class="section">
+  <h2>In use now</h2>
+  <div id="fallback" class="warnbox" style="display:none"></div>
+  <div id="pending" class="warnbox" style="display:none"></div>
+  <div class="grid" style="grid-template-columns: repeat(auto-fill, minmax(220px, 1fr))">
+    <div class="card"><div class="muted">Server</div><div class="stat small" id="aHost">—</div><div class="muted" id="aSource"></div></div>
+    <div class="card"><div class="muted">Database / user</div><div class="stat small" id="aDb">—</div><div class="muted" id="aDriver"></div></div>
+    <div class="card"><div class="muted">Stored rows</div><div id="aTables" class="muted" style="margin-top:4px"></div></div>
+  </div>
+</div>
+
+<div class="section">
+  <h2>Use a different database</h2>
+  <div id="msg"></div>
+  <div class="row">
+    <div><label>Host / IP of the PostgreSQL server</label><input id="d_host" placeholder="192.168.1.20" oninput="renderSnippets()" /></div>
+    <div style="flex:.4"><label>Port</label><input id="d_port" type="number" value="5432" oninput="renderSnippets()" /></div>
+  </div>
+  <div class="row">
+    <div><label>Database name</label><input id="d_db" value="cognex" oninput="renderSnippets()" /></div>
+    <div><label>User</label><input id="d_user" value="cognex" oninput="renderSnippets()" /></div>
+    <div><label>Password</label><input id="d_pw" type="password" placeholder="" oninput="renderSnippets()" /></div>
+  </div>
+  <div class="hint">The app runs inside a container, so <code>localhost</code> means the app container itself. Use the IP or name of the machine running PostgreSQL.</div>
+  <label style="display:flex;align-items:center;gap:8px;margin-top:14px"><input type="checkbox" id="d_copy" checked style="width:auto"/> Copy all current data (users, cameras, counters, history) into the new database. It must be empty.</label>
+  <div class="actions" style="margin-top:16px">
+    <button class="btn secondary" onclick="testConn()">Test connection</button>
+    <button class="btn" onclick="saveConn()">Save</button>
+    <button class="btn secondary" id="restartBtn" onclick="restartApp()">Restart app now</button>
+    <button class="btn secondary" id="resetBtn" onclick="resetConn()" style="margin-left:auto">Go back to the default database</button>
+  </div>
+  <div class="hint" style="margin-top:8px">A saved database is used after the app restarts. If it cannot be reached at startup, the app falls back to the default (DATABASE_URL) and shows a warning here.</div>
+</div>
+
+<div class="section">
+  <h2>Start a new PostgreSQL database with Docker</h2>
+  <p class="muted" style="margin-top:0">Run one of these on the machine that should hold the database, then fill in its IP above, test and save. The values come from the form above; pick a strong password.</p>
+  <div class="row">
+    <div><label>Container name</label><input id="s_name" value="cognex-db" oninput="renderSnippets()" /></div>
+    <div><label>Data volume</label><input id="s_vol" value="cognex_db_data" oninput="renderSnippets()" /></div>
+    <div style="flex:.4"><label>PostgreSQL version</label><input id="s_ver" value="16" oninput="renderSnippets()" /></div>
+  </div>
+
+  <div class="snippet-head"><strong>Option 1: docker run</strong><button class="btn secondary small" onclick="copySnippet('sn_run')">Copy</button></div>
+  <pre class="snippet" id="sn_run"></pre>
+
+  <div class="snippet-head"><strong>Option 2: docker compose</strong> <span class="muted">save as docker-compose.yml, then <code>docker compose up -d</code></span><button class="btn secondary small" onclick="copySnippet('sn_compose')">Copy</button></div>
+  <pre class="snippet" id="sn_compose"></pre>
+
+  <div class="snippet-head"><strong>Check it is running</strong><button class="btn secondary small" onclick="copySnippet('sn_check')">Copy</button></div>
+  <pre class="snippet" id="sn_check"></pre>
+
+  <div class="snippet-head"><strong>Backup and restore</strong><button class="btn secondary small" onclick="copySnippet('sn_backup')">Copy</button></div>
+  <pre class="snippet" id="sn_backup"></pre>
+
+  <div class="snippet-head"><strong>Or set it in the app's .env instead</strong> <span class="muted">(DATABASE_URL, used when nothing is saved here)</span><button class="btn secondary small" onclick="copySnippet('sn_url')">Copy</button></div>
+  <pre class="snippet" id="sn_url"></pre>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+const v = (id) => document.getElementById(id).value.trim();
+let HAS_SAVED_PW = false;
+
+function form() {
+  return {
+    host: v('d_host'), port: parseInt(v('d_port'), 10) || 5432,
+    database: v('d_db'), user: v('d_user'), password: document.getElementById('d_pw').value || null,
+  };
+}
+
+function showMsg(text, kind) {
+  const m = document.getElementById('msg');
+  m.innerHTML = '';
+  if (text) m.append(el('div', { class: kind === 'ok' ? 'okbox' : kind === 'warn' ? 'warnbox' : 'error' }, text));
+}
+
+function renderSnippets() {
+  const f = form();
+  const pw = f.password || 'CHANGE_ME';
+  const name = v('s_name') || 'cognex-db', vol = v('s_vol') || 'cognex_db_data', ver = v('s_ver') || '16';
+  document.getElementById('sn_run').textContent =
+`docker volume create ${vol}
+docker run -d --name ${name} --restart unless-stopped \\
+  -e POSTGRES_DB=${f.database} \\
+  -e POSTGRES_USER=${f.user} \\
+  -e POSTGRES_PASSWORD='${pw}' \\
+  -p ${f.port}:5432 \\
+  -v ${vol}:/var/lib/postgresql/data \\
+  postgres:${ver}-alpine`;
+  document.getElementById('sn_compose').textContent =
+`services:
+  db:
+    image: postgres:${ver}-alpine
+    container_name: ${name}
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${f.database}
+      POSTGRES_USER: ${f.user}
+      POSTGRES_PASSWORD: '${pw}'
+    ports:
+      - "${f.port}:5432"
+    volumes:
+      - ${vol}:/var/lib/postgresql/data
+
+volumes:
+  ${vol}:`;
+  document.getElementById('sn_check').textContent =
+`docker ps --filter name=${name}
+docker logs --tail 20 ${name}
+docker exec -it ${name} psql -U ${f.user} -d ${f.database} -c "select version();"`;
+  document.getElementById('sn_backup').textContent =
+`# backup to a file on the host
+docker exec ${name} pg_dump -U ${f.user} -d ${f.database} -Fc > cognex-backup.dump
+# restore into the (empty) database
+docker exec -i ${name} pg_restore -U ${f.user} -d ${f.database} --clean --if-exists < cognex-backup.dump`;
+  document.getElementById('sn_url').textContent =
+    `DATABASE_URL=postgresql+psycopg://${encodeURIComponent(f.user)}:${encodeURIComponent(pw)}@${f.host || 'DB_HOST_IP'}:${f.port}/${encodeURIComponent(f.database)}`;
+}
+
+function copySnippet(id) {
+  const text = document.getElementById(id).textContent;
+  const done = () => toast('Copied');
+  if (navigator.clipboard && window.isSecureContext) { navigator.clipboard.writeText(text).then(done, () => fallbackCopy(text, done)); }
+  else fallbackCopy(text, done);
+}
+function fallbackCopy(text, done) {
+  const ta = el('textarea', { style: 'position:fixed;opacity:0' });
+  ta.value = text; document.body.append(ta); ta.select();
+  try { document.execCommand('copy'); done(); } catch (e) { toast('Copy failed, select the text instead', true); }
+  ta.remove();
+}
+
+async function loadStatus() {
+  const s = await getJSON('/api/database');
+  const a = s.active;
+  document.getElementById('aHost').textContent = a.host ? a.host + ':' + (a.port || 5432) : (a.database || 'local file');
+  document.getElementById('aSource').textContent = s.source === 'saved' ? 'Set on this page' : 'Default (DATABASE_URL from the server setup)';
+  document.getElementById('aDb').textContent = (a.database || '—') + (a.user ? ' / ' + a.user : '');
+  document.getElementById('aDriver').textContent = a.driver;
+  const t = document.getElementById('aTables'); t.innerHTML = '';
+  for (const [k, n] of Object.entries(s.tables)) t.append(el('div', {}, k.replace(/_/g, ' ') + ': ' + (n === null ? '?' : n)));
+  const fb = document.getElementById('fallback');
+  fb.style.display = s.fallback_error ? 'block' : 'none';
+  fb.textContent = s.fallback_error ? 'The saved database could not be reached when the app started, so the default database is in use. Error: ' + s.fallback_error : '';
+  const sv = s.saved;
+  const pending = document.getElementById('pending');
+  const differs = sv && !(s.source === 'saved' && a.host === sv.host && String(a.port || 5432) === String(sv.port) && a.database === sv.database && a.user === sv.user);
+  pending.style.display = (differs && !s.fallback_error) ? 'block' : 'none';
+  pending.textContent = differs ? `A different database is saved (${sv.host}:${sv.port}/${sv.database}). Restart the app to switch to it.` : '';
+  document.getElementById('resetBtn').style.display = sv ? '' : 'none';
+  if (sv && !v('d_host')) {
+    document.getElementById('d_host').value = sv.host;
+    document.getElementById('d_port').value = sv.port;
+    document.getElementById('d_db').value = sv.database;
+    document.getElementById('d_user').value = sv.user;
+    HAS_SAVED_PW = sv.has_password;
+    document.getElementById('d_pw').placeholder = HAS_SAVED_PW ? '(saved, leave blank to keep)' : '';
+  }
+  renderSnippets();
+}
+
+async function testConn() {
+  showMsg('Connecting…', 'warn');
+  try {
+    const r = await postJSON('/api/database/test', form());
+    showMsg(r.ok ? 'Connection works.' : 'Cannot connect: ' + r.error, r.ok ? 'ok' : 'err');
+  } catch (e) { showMsg(e.message, 'err'); }
+}
+
+async function saveConn() {
+  const copy = document.getElementById('d_copy').checked;
+  if (!confirm('Save this database' + (copy ? ' and copy all current data into it' : '') + '? It will be used after the app restarts.')) return;
+  showMsg(copy ? 'Testing and copying data, this can take a while…' : 'Testing connection…', 'warn');
+  try {
+    const r = await api('PUT', '/api/database', { ...form(), copy_data: copy });
+    let text = 'Saved.';
+    if (r.copied) text += ' Copied ' + Object.values(r.copied).reduce((a, b) => a + b, 0) + ' rows.';
+    showMsg(text + ' Press "Restart app now" to switch to it.', 'ok');
+    loadStatus();
+  } catch (e) { showMsg(e.message, 'err'); }
+}
+
+async function resetConn() {
+  if (!confirm('Forget the saved database and use the default one (DATABASE_URL) after restart?')) return;
+  try { await delJSON('/api/database'); showMsg('Reset. Restart the app to switch back to the default database.', 'ok'); loadStatus(); }
+  catch (e) { showMsg(e.message, 'err'); }
+}
+
+async function restartApp() {
+  if (!confirm('Restart the app now? Everyone is disconnected for a few seconds and cameras are not read during the restart.')) return;
+  try { await postJSON('/api/database/restart'); } catch (e) { /* the process may already be going down */ }
+  showMsg('Restarting… this page reloads when the app is back.', 'warn');
+  const started = Date.now();
+  await new Promise(r => setTimeout(r, 3000));
+  while (Date.now() - started < 120000) {
+    try { const r = await fetch('/healthz', { cache: 'no-store' }); if (r.ok) { location.reload(); return; } } catch (e) { /* still down */ }
+    await new Promise(r => setTimeout(r, 2000));
+  }
+  showMsg('The app did not come back within 2 minutes. Check the container with: docker compose ps / docker compose logs web', 'err');
+}
+
+loadStatus().catch(e => showMsg(e.message, 'err'));
+</script>
+{% endblock %}

@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+*.egg-info/
+
+# Local configuration and secrets (templates are .env.example)
+.env
+.env.*
+!.env.example
+deploy/.env
+
+# Local data
+*.db
+*.sqlite
+*.sqlite3
+data/
+*.sql
+*.dump
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Claude Code local settings
+.claude/

@@ -1,0 +1,249 @@
+"""Background poller (and the TCP listener wiring for cameras that push).
+
+Runs in a daemon thread. On each device's interval it: reads a sample via the
+device's protocol driver, folds it into the reset-proof running totals,
+handles job changes, writes a Reading row, updates the Device status, and
+evaluates notification rules.
+
+One poll cycle is also exposed as ``poll_device_once`` so it can be called
+synchronously from the API ("test / poll now" buttons) and from tests.
+
+Cameras on a push protocol (``tcp_listen``, ``udp_listen``, ``slmp_listen``)
+are not polled; ``listener`` runs a server for each and hands every received
+record to ``record_sample``, so pushed and polled data go through exactly the
+same accumulation and logging.
+"""
+from __future__ import annotations
+
+import logging
+import threading
+import time
+
+from sqlalchemy.orm import Session
+
+from . import notifications, production, protocols
+from .config import settings
+from .counters import Sample, apply_sample, new_state_for
+from .database import SessionLocal
+from .models import CounterState, Device, Reading, utcnow
+from .protocols.slmp_server import SlmpServerManager
+from .protocols.tcp_listener import ListenerManager, ListenerRunner
+from .protocols.udp_listener import UdpListenerManager
+
+log = logging.getLogger("cognex.poller")
+
+
+def _handle_sample(db: Session, device: Device, sample: Sample) -> CounterState:
+    """Apply a sample to the right CounterState, rotating on job change."""
+    active = (
+        db.query(CounterState)
+        .filter(CounterState.device_id == device.id, CounterState.is_active.is_(True))
+        .first()
+    )
+
+    if active is None:
+        # first ever sample for this device
+        active = new_state_for(device, sample)
+        db.add(active)
+        db.flush()
+    elif active.job_name != sample.job_name:
+        # job changed: freeze the old totals, start fresh for the new job.
+        active.is_active = False
+        # Resume a previous run of the same job if one exists, else start new.
+        prior = (
+            db.query(CounterState)
+            .filter(
+                CounterState.device_id == device.id,
+                CounterState.job_name == sample.job_name,
+            )
+            .first()
+        )
+        if prior is not None:
+            prior.is_active = True
+            # treat the camera as freshly baselined for the resumed job
+            prior.last_raw_pass = sample.raw_pass
+            prior.last_raw_fail = sample.raw_fail
+            prior.last_raw_count = sample.raw_count
+            active = prior
+        else:
+            active = new_state_for(device, sample)
+            db.add(active)
+            db.flush()
+    else:
+        before = active.total_pass
+        apply_sample(active, sample)
+        if active.total_pass > before:
+            production.note_pass_increase(device)
+
+    return active
+
+
+def poll_device_once(db: Session, device: Device) -> Reading:
+    """Perform exactly one read+accumulate for a device. Raises on read error."""
+    driver = protocols.get_driver(
+        device.protocol, device.host, device.port, {**device.protocol_config, "device_id": device.id}
+    )
+    sample = driver.read()  # may raise ProtocolError
+    return record_sample(db, device, sample)
+
+
+def record_sample(db: Session, device: Device, sample: Sample) -> Reading:
+    """Accumulate one sample, log a Reading, mark the device online, notify."""
+    state = _handle_sample(db, device, sample)
+
+    reading = Reading(
+        device_id=device.id,
+        job_name=sample.job_name,
+        raw_pass=sample.raw_pass,
+        raw_fail=sample.raw_fail,
+        raw_count=sample.raw_count,
+        total_pass=state.total_pass,
+        total_fail=state.total_fail,
+        extra=sample.extra or {},
+    )
+    db.add(reading)
+
+    device.connected = True
+    device.last_error = None
+    device.last_poll_at = utcnow()
+    device.current_job = sample.job_name
+    db.commit()
+
+    notifications.evaluate_device(db, device)
+    return reading
+
+
+class Poller:
+    def __init__(self) -> None:
+        self._thread: threading.Thread | None = None
+        self._stop = threading.Event()
+        # device_id -> monotonic timestamp of next due poll
+        self._next_due: dict[int, float] = {}
+
+    def start(self) -> None:
+        if self._thread and self._thread.is_alive():
+            return
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._run, name="cognex-poller", daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread:
+            self._thread.join(timeout=5)
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            try:
+                self._tick()
+            except Exception:  # noqa: BLE001 - never let the loop die
+                pass
+            self._stop.wait(0.5)
+
+    def _tick(self) -> None:
+        now = time.monotonic()
+        db = SessionLocal()
+        try:
+            devices = db.query(Device).filter(Device.enabled.is_(True)).all()
+            for device in devices:
+                if protocols.is_push(device.protocol):
+                    continue  # served by the TCP listener, not polled
+                interval = max(settings.min_poll_interval, device.poll_interval)
+                due = self._next_due.get(device.id, 0.0)
+                if now < due:
+                    continue
+                self._next_due[device.id] = now + interval
+                self._poll_safe(db, device)
+        finally:
+            db.close()
+
+    def _poll_safe(self, db: Session, device: Device) -> None:
+        try:
+            poll_device_once(db, device)
+        except Exception as exc:  # noqa: BLE001
+            db.rollback()
+            device.connected = False
+            device.last_error = str(exc)
+            device.last_poll_at = utcnow()
+            db.commit()
+            try:
+                notifications.evaluate_device(db, device)
+            except Exception:  # noqa: BLE001
+                db.rollback()
+
+
+poller = Poller()
+
+
+# --------------------------------------------------------------------------- #
+# Listeners (cameras that push data to the app: TCP, UDP, SLMP server)
+# --------------------------------------------------------------------------- #
+
+
+def _listener_sample(device_id: int, sample: Sample) -> None:
+    db = SessionLocal()
+    try:
+        device = db.get(Device, device_id)
+        if device is None or not device.enabled:
+            return
+        record_sample(db, device, sample)
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+def _listener_status(device_id: int, connected: bool, error: str | None) -> None:
+    db = SessionLocal()
+    try:
+        device = db.get(Device, device_id)
+        if device is None:
+            return
+        device.connected = connected
+        device.last_error = error
+        device.last_poll_at = utcnow()
+        db.commit()
+        if not connected:
+            notifications.evaluate_device(db, device)
+    except Exception:  # noqa: BLE001
+        db.rollback()
+        log.exception("could not update listener status for device %s", device_id)
+    finally:
+        db.close()
+
+
+def _listen_devices(protocol: str = "tcp_listen") -> list[tuple[int, str, int, dict]]:
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(Device)
+            .filter(Device.enabled.is_(True), Device.protocol == protocol)
+            .all()
+        )
+        return [(d.id, d.host, d.port, d.protocol_config or {}) for d in rows]
+    finally:
+        db.close()
+
+
+class _Listeners:
+    """Starts/stops one ListenerRunner per push protocol as a unit."""
+
+    def __init__(self, managers: list[ListenerManager]):
+        self.runners = [
+            ListenerRunner(m, load=lambda p=m.protocol: _listen_devices(p)) for m in managers
+        ]
+
+    def start(self) -> None:
+        for r in self.runners:
+            r.start()
+
+    def stop(self) -> None:
+        for r in self.runners:
+            r.stop()
+
+
+listener_manager = ListenerManager(on_sample=_listener_sample, status=_listener_status)
+udp_listener_manager = UdpListenerManager(on_sample=_listener_sample, status=_listener_status)
+slmp_server_manager = SlmpServerManager(on_sample=_listener_sample, status=_listener_status)
+listener = _Listeners([listener_manager, udp_listener_manager, slmp_server_manager])

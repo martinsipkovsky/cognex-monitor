@@ -1,0 +1,154 @@
+{% extends "base.html" %}
+{% block title %}Camera · Cognex Monitor{% endblock %}
+{% block content %}
+<div class="toolbar">
+  <div>
+    <div class="muted"><a href="/">&larr; Dashboard</a></div>
+    <h1 id="title">Camera</h1>
+    <p class="lead" id="sub"></p>
+  </div>
+  <div class="actions" id="controls"></div>
+</div>
+
+<div class="grid" style="grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); margin-bottom:16px">
+  <div class="card"><div class="muted">Production</div><div id="prodState" class="stat small">—</div><div class="muted" id="prodNote"></div></div>
+  <div class="card"><div class="muted">Current job</div><div id="job" class="stat small">—</div><div class="muted" id="conn"></div></div>
+  <div class="card"><div class="muted">Job totals (OK / NOK)</div><div class="stat small"><span id="tPass" class="value pass">0</span> / <span id="tFail" class="value fail">0</span></div><div class="muted" id="tScrap"></div></div>
+  <div class="card"><div class="muted" id="winLabel">Last 8 h (OK / NOK)</div><div class="stat small"><span id="wPass" class="value pass">0</span> / <span id="wFail" class="value fail">0</span></div><div class="muted" id="wScrap"></div></div>
+</div>
+
+<div class="card">
+  <div class="toolbar" style="margin-bottom:8px">
+    <h3 style="margin:0">OK / NOK over time</h3>
+    <div class="seg" id="range">
+      <button data-h="1">1 h</button><button data-h="8" class="on">8 h</button><button data-h="24">24 h</button><button data-h="168">7 days</button>
+    </div>
+  </div>
+  <div class="chart-wrap"><svg id="chart"></svg><div class="chart-tip" id="tip"></div></div>
+  <div class="legend"><span><i style="background:var(--ok)"></i>OK</span><span><i style="background:var(--bad)"></i>NOK</span><span id="bucketLabel"></span></div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+const DEVICE_ID = {{ device_id }};
+const CAN_CONTROL = {{ 'true' if user.has_permission('control_connections') else 'false' }};
+let HOURS = 8;
+let lastState = null;
+
+document.querySelectorAll('#range button').forEach(b => b.addEventListener('click', () => {
+  document.querySelectorAll('#range button').forEach(x => x.classList.toggle('on', x === b));
+  HOURS = parseFloat(b.dataset.h);
+  load();
+}));
+
+function fmtBucket(s) { return s >= 3600 ? (s / 3600) + ' h' : (s / 60) + ' min'; }
+function fmtTime(iso, bucket) {
+  const d = new Date(iso);
+  const t = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  return bucket >= 3600 * 3 || HOURS > 24 ? d.toLocaleDateString([], { day: '2-digit', month: '2-digit' }) + ' ' + t : t;
+}
+
+function renderControls(d) {
+  const c = document.getElementById('controls');
+  if (lastState === d.production_state && c.childElementCount) return;
+  lastState = d.production_state;
+  c.innerHTML = '';
+  if (!CAN_CONTROL) return;
+  if (d.production_state === 'stopped' || d.production_state === 'idle') {
+    c.append(el('button', { class: 'btn ok', onclick: () => setProduction('start') }, '▶ Start production'));
+  }
+  if (d.production_state !== 'stopped') {
+    c.append(el('button', { class: 'btn danger', onclick: () => setProduction('stop') }, '■ Stop production'));
+  }
+}
+
+async function setProduction(action) {
+  if (action === 'stop' && !confirm('Stop production for this camera? It stays stopped (no scrap alerts) until you press Start.')) return;
+  try { await postJSON('/api/devices/' + DEVICE_ID + '/production/' + action); lastState = null; load(); }
+  catch (e) { toast(e.message, true); }
+}
+
+function renderChart(h) {
+  const svg = document.getElementById('chart');
+  const W = svg.getBoundingClientRect().width || 800, H = 280, L = 44, R = 8, T = 10, B = 26;
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  const bars = h.bars;
+  const max = Math.max(1, ...bars.map(b => b.ok + b.nok));
+  const step = niceStep(max);
+  const top = Math.ceil(max / step) * step;
+  const pw = W - L - R, ph = H - T - B;
+  const bw = pw / bars.length;
+  const y = v => T + ph - (v / top) * ph;
+  let out = '';
+  for (let v = 0; v <= top; v += step) {
+    out += `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" stroke="var(--border)" stroke-width="1"/>`;
+    out += `<text x="${L - 6}" y="${y(v) + 4}" text-anchor="end" fill="var(--text-dim)" font-size="11">${v}</text>`;
+  }
+  const labelEvery = Math.ceil(bars.length / Math.max(1, Math.floor(pw / 70)));
+  bars.forEach((b, i) => {
+    const x = L + i * bw + Math.min(2, bw * 0.15);
+    const w = Math.max(1, bw - 2 * Math.min(2, bw * 0.15));
+    const hOk = (b.ok / top) * ph, hNok = (b.nok / top) * ph;
+    out += `<rect x="${x}" y="${T + ph - hOk}" width="${w}" height="${hOk}" fill="var(--ok)" rx="1"/>`;
+    out += `<rect x="${x}" y="${T + ph - hOk - hNok}" width="${w}" height="${hNok}" fill="var(--bad)" rx="1"/>`;
+    out += `<rect x="${L + i * bw}" y="${T}" width="${bw}" height="${ph}" fill="transparent" data-i="${i}"/>`;
+    if (i % labelEvery === 0) out += `<text x="${L + i * bw + bw / 2}" y="${H - 8}" text-anchor="middle" fill="var(--text-dim)" font-size="11">${fmtTime(b.t, h.bucket_seconds)}</text>`;
+  });
+  svg.innerHTML = out;
+  const tip = document.getElementById('tip');
+  svg.onmousemove = (e) => {
+    const i = e.target.dataset && e.target.dataset.i;
+    if (i === undefined) { tip.style.display = 'none'; return; }
+    const b = bars[+i], tot = b.ok + b.nok;
+    tip.innerHTML = `<strong>${fmtTime(b.t, h.bucket_seconds)}</strong> (${fmtBucket(h.bucket_seconds)})<br>` +
+      `<span style="color:var(--ok)">OK ${b.ok}</span> · <span style="color:var(--bad)">NOK ${b.nok}</span>` +
+      (tot ? ` · scrap ${fmtPct(b.nok / tot)}` : '');
+    tip.style.display = 'block';
+    const r = svg.getBoundingClientRect();
+    tip.style.left = Math.min(e.clientX - r.left + 12, r.width - tip.offsetWidth - 4) + 'px';
+    tip.style.top = (e.clientY - r.top - 40) + 'px';
+  };
+  svg.onmouseleave = () => { tip.style.display = 'none'; };
+}
+
+function niceStep(max) {
+  const raw = max / 5, mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  const n = raw / mag;
+  return Math.max(1, (n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10) * mag);
+}
+
+async function load() {
+  let d;
+  try { d = await getJSON('/api/data/devices/' + DEVICE_ID + '?hours=' + HOURS); }
+  catch (e) { document.getElementById('sub').textContent = e.message; return; }
+  document.title = d.name + ' · Cognex Monitor';
+  document.getElementById('title').textContent = d.name;
+  document.getElementById('sub').textContent = d.protocol + ' · ' + (d.host || 'any') + ':' + d.port;
+  const [cls, label] = PROD_BADGE[d.production_state];
+  const ps = document.getElementById('prodState');
+  ps.innerHTML = ''; ps.append(el('span', { class: 'badge ' + cls, style: 'font-size:14px' }, label));
+  document.getElementById('prodNote').textContent =
+    d.production_state === 'stopped' ? 'Stopped by an operator; no scrap alerts until Start.'
+    : d.production_state === 'idle' ? idleText(d) + '. Resumes on the next pass.'
+    : 'Last pass ' + fmtAgo(d.last_pass_change_at) + '; stops after ' + d.idle_timeout_min + ' min without passes.';
+  document.getElementById('job').textContent = d.current_job || '—';
+  document.getElementById('conn').textContent = (d.connected ? 'Online' : 'Offline') + ' · last data ' + fmtAgo(d.last_poll_at);
+  const j = d.active_job || { total_pass: 0, total_fail: 0, scrap_rate: 0 };
+  document.getElementById('tPass').textContent = j.total_pass;
+  document.getElementById('tFail').textContent = j.total_fail;
+  document.getElementById('tScrap').textContent = 'Scrap ' + fmtPct(j.scrap_rate);
+  const h = d.history, wt = h.ok + h.nok;
+  document.getElementById('winLabel').textContent = 'Last ' + (HOURS >= 48 ? HOURS / 24 + ' days' : HOURS + ' h') + ' (OK / NOK)';
+  document.getElementById('wPass').textContent = h.ok;
+  document.getElementById('wFail').textContent = h.nok;
+  document.getElementById('wScrap').textContent = 'Scrap ' + (wt ? fmtPct(h.nok / wt) : '—');
+  document.getElementById('bucketLabel').textContent = 'one bar = ' + fmtBucket(h.bucket_seconds);
+  renderControls(d);
+  renderChart(h);
+}
+
+load();
+setInterval(load, 10000);
+window.addEventListener('resize', load);
+</script>
+{% endblock %}

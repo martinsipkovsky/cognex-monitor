@@ -1,0 +1,48 @@
+# Server deployment: runs the prebuilt image from Docker Hub, no source code needed.
+# Put this file and a .env (copied from .env.example) in one folder, then:
+#   docker login
+#   docker compose up -d
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-cognex}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cognex}
+      POSTGRES_DB: ${POSTGRES_DB:-cognex}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-cognex}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  web:
+    image: azanar666/cognex-monitor:latest
+    pull_policy: always
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-cognex}:${POSTGRES_PASSWORD:-cognex}@db:5432/${POSTGRES_DB:-cognex}
+      SECRET_KEY: ${SECRET_KEY:-change-me-in-production}
+      DEFAULT_ADMIN_USER: ${DEFAULT_ADMIN_USER:-Admin}
+      DEFAULT_ADMIN_PASSWORD: ${DEFAULT_ADMIN_PASSWORD:-1234}
+      POLL_ENABLED: ${POLL_ENABLED:-true}
+      LISTEN_PORTS: ${LISTEN_PORTS:-5100-5119}
+      DATA_DIR: /srv/data
+    volumes:
+      # database chosen on the Database page; survives image updates
+      - app_data:/srv/data
+    ports:
+      - "${WEB_PORT:-8000}:8000"
+      # Listeners: cameras push their data to these ports (one per camera).
+      # TCP for the TCP listener and SLMP server, UDP for the UDP listener.
+      - "${LISTEN_PORTS:-5100-5119}:${LISTEN_PORTS:-5100-5119}"
+      - "${LISTEN_PORTS:-5100-5119}:${LISTEN_PORTS:-5100-5119}/udp"
+
+volumes:
+  db_data:
+  app_data:

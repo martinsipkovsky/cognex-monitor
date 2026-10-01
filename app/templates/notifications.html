@@ -1,0 +1,156 @@
+{% extends "base.html" %}
+{% block title %}Notifications · Cognex Monitor{% endblock %}
+{% block content %}
+<h1>Notifications</h1>
+<p class="lead">Send alerts to a WhatsApp group (or any webhook) on high scrap, fail counts or disconnects.</p>
+
+<div class="section">
+  <div class="toolbar"><h2 style="border:none">Providers</h2><button class="btn small" onclick="openModal('provModal')">+ Add provider</button></div>
+  <table><thead><tr><th>Name</th><th>Kind</th><th>Enabled</th><th></th></tr></thead><tbody id="provRows"></tbody></table>
+  <div id="provEmpty" class="empty" style="display:none">No providers. Add one to deliver alerts.</div>
+</div>
+
+<div class="section">
+  <div class="toolbar"><h2 style="border:none">Rules</h2><button class="btn small" onclick="openModal('ruleModal')">+ Add rule</button></div>
+  <table><thead><tr><th>Name</th><th>Camera</th><th>Condition</th><th>Threshold</th><th>Cooldown</th><th>Enabled</th><th></th></tr></thead><tbody id="ruleRows"></tbody></table>
+  <div id="ruleEmpty" class="empty" style="display:none">No rules yet.</div>
+</div>
+
+<div class="section">
+  <h2>Recent alert log</h2>
+  <table><thead><tr><th>Time</th><th>Message</th><th>Delivered</th><th>Detail</th></tr></thead><tbody id="logRows"></tbody></table>
+  <div id="logEmpty" class="empty" style="display:none">No alerts sent yet.</div>
+</div>
+
+<!-- provider modal -->
+<div class="modal-back" id="provModal"><div class="modal">
+  <h2>Add provider</h2>
+  <div id="provError" class="error" style="display:none"></div>
+  <label>Name</label><input id="p_name" placeholder="Production WhatsApp group" />
+  <label>Kind</label><select id="p_kind" onchange="onKind()"></select>
+  <div id="p_help" class="hint"></div>
+  <label>Config (JSON)</label><textarea id="p_config" spellcheck="false">{
+  "transport": "webhook",
+  "url": "https://your-whatsapp-gateway/send",
+  "extra": {"chatId": "1234567890-123456@g.us"}
+}</textarea>
+  <div class="actions" style="margin-top:18px;justify-content:flex-end">
+    <button class="btn secondary" onclick="closeModal('provModal')">Cancel</button>
+    <button class="btn" onclick="saveProvider()">Save</button>
+  </div>
+</div></div>
+
+<!-- rule modal -->
+<div class="modal-back" id="ruleModal"><div class="modal">
+  <h2>Add rule</h2>
+  <div id="ruleError" class="error" style="display:none"></div>
+  <label>Name</label><input id="r_name" placeholder="High scrap alert" />
+  <label>Camera</label><select id="r_device"><option value="">All cameras</option></select>
+  <label>Condition</label>
+  <select id="r_condition" onchange="onCond()">
+    <option value="scrap_rate">Scrap rate ≥ threshold (fraction, e.g. 0.05 = 5%)</option>
+    <option value="fail_count">Fail count ≥ threshold</option>
+    <option value="disconnected">Camera disconnected</option>
+  </select>
+  <div class="row">
+    <div><label>Threshold</label><input id="r_threshold" type="number" step="any" value="0.05" /></div>
+    <div><label>Cooldown (s)</label><input id="r_cooldown" type="number" value="300" /></div>
+  </div>
+  <div class="actions" style="margin-top:18px;justify-content:flex-end">
+    <button class="btn secondary" onclick="closeModal('ruleModal')">Cancel</button>
+    <button class="btn" onclick="saveRule()">Save</button>
+  </div>
+</div></div>
+{% endblock %}
+{% block scripts %}
+<script>
+let KINDS = [], DEVICES = [];
+
+function onKind() {
+  const p = KINDS.find(k => k.key === document.getElementById('p_kind').value);
+  document.getElementById('p_help').innerHTML = p
+    ? Object.entries(p.config_fields).map(([k, v]) => `<div><code>${k}</code> — ${v}</div>`).join('') : '';
+}
+function onCond() {
+  const c = document.getElementById('r_condition').value;
+  document.getElementById('r_threshold').value = c === 'scrap_rate' ? 0.05 : (c === 'fail_count' ? 10 : 0);
+}
+
+async function load() {
+  KINDS = await getJSON('/api/notifications/notifier-kinds');
+  DEVICES = await getJSON('/api/devices');
+  document.getElementById('p_kind').innerHTML = KINDS.map(k => `<option value="${k.key}">${k.label}</option>`).join('');
+  document.getElementById('r_device').innerHTML = '<option value="">All cameras</option>' + DEVICES.map(d => `<option value="${d.id}">${d.name}</option>`).join('');
+  onKind();
+
+  const provs = await getJSON('/api/notifications/providers');
+  const pr = document.getElementById('provRows'); pr.innerHTML = '';
+  document.getElementById('provEmpty').style.display = provs.length ? 'none' : 'block';
+  for (const p of provs) pr.append(el('tr', {},
+    el('td', {}, p.name), el('td', {}, p.kind),
+    el('td', {}, el('span', { class: 'badge ' + (p.enabled ? 'ok' : 'off') }, p.enabled ? 'on' : 'off')),
+    el('td', {}, el('div', { class: 'actions' },
+      el('button', { class: 'btn secondary small', onclick: () => testProvider(p.id) }, 'Test send'),
+      el('button', { class: 'btn danger small', onclick: () => delProvider(p.id) }, 'Delete'))),
+  ));
+
+  const rules = await getJSON('/api/notifications/rules');
+  const rr = document.getElementById('ruleRows'); rr.innerHTML = '';
+  document.getElementById('ruleEmpty').style.display = rules.length ? 'none' : 'block';
+  for (const r of rules) {
+    const dev = r.device_id ? (DEVICES.find(d => d.id === r.device_id) || {}).name || ('#' + r.device_id) : 'All';
+    rr.append(el('tr', {},
+      el('td', {}, r.name), el('td', {}, dev), el('td', {}, r.condition),
+      el('td', {}, r.condition === 'scrap_rate' ? fmtPct(r.threshold) : String(r.threshold)),
+      el('td', {}, r.cooldown + 's'),
+      el('td', {}, el('span', { class: 'badge ' + (r.enabled ? 'ok' : 'off') }, r.enabled ? 'on' : 'off')),
+      el('td', {}, el('button', { class: 'btn danger small', onclick: () => delRule(r.id) }, 'Delete')),
+    ));
+  }
+
+  const logs = await getJSON('/api/notifications/logs');
+  const lr = document.getElementById('logRows'); lr.innerHTML = '';
+  document.getElementById('logEmpty').style.display = logs.length ? 'none' : 'block';
+  for (const l of logs) lr.append(el('tr', {},
+    el('td', { class: 'muted' }, new Date(l.created_at).toLocaleString()),
+    el('td', {}, l.message),
+    el('td', {}, el('span', { class: 'badge ' + (l.delivered ? 'ok' : 'bad') }, l.delivered ? 'yes' : 'no')),
+    el('td', { class: 'muted' }, l.detail || ''),
+  ));
+}
+
+async function saveProvider() {
+  const err = document.getElementById('provError'); err.style.display = 'none';
+  try {
+    await postJSON('/api/notifications/providers', {
+      name: document.getElementById('p_name').value.trim(),
+      kind: document.getElementById('p_kind').value,
+      config: parseJSONField(document.getElementById('p_config').value, {}),
+      enabled: true,
+    });
+    closeModal('provModal'); load();
+  } catch (e) { err.textContent = e.message; err.style.display = 'block'; }
+}
+async function saveRule() {
+  const err = document.getElementById('ruleError'); err.style.display = 'none';
+  try {
+    const dev = document.getElementById('r_device').value;
+    await postJSON('/api/notifications/rules', {
+      name: document.getElementById('r_name').value.trim(),
+      device_id: dev ? parseInt(dev, 10) : null,
+      condition: document.getElementById('r_condition').value,
+      threshold: parseFloat(document.getElementById('r_threshold').value) || 0,
+      cooldown: parseInt(document.getElementById('r_cooldown').value, 10) || 300,
+      enabled: true,
+    });
+    closeModal('ruleModal'); load();
+  } catch (e) { err.textContent = e.message; err.style.display = 'block'; }
+}
+async function testProvider(id) { try { await postJSON('/api/notifications/providers/' + id + '/test'); toast('Test sent OK'); load(); } catch (e) { toast(e.message, true); load(); } }
+async function delProvider(id) { if (confirm('Delete provider?')) { await delJSON('/api/notifications/providers/' + id); load(); } }
+async function delRule(id) { if (confirm('Delete rule?')) { await delJSON('/api/notifications/rules/' + id); load(); } }
+
+load();
+setInterval(load, 8000);
+</script>
+{% endblock %}

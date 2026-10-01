@@ -1,0 +1,1 @@
+"""Cognex camera monitoring application."""

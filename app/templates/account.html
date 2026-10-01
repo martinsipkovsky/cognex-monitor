@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Account · Cognex Monitor{% endblock %}
+{% block content %}
+<h1>Account</h1>
+<p class="lead">Signed in as <strong>{{ user.username }}</strong> ({{ 'Administrator' if user.is_admin else 'User' }}).</p>
+
+<div class="card" style="max-width:420px">
+  <h3>Change your password</h3>
+  <div id="err" class="error" style="display:none"></div>
+  <label>Current password</label><input id="cur" type="password" />
+  <label>New password</label><input id="new" type="password" />
+  <button class="btn" style="margin-top:16px" onclick="change()">Update password</button>
+</div>
+
+{% if user.has_permission('view_dashboard') %}
+<div class="card" style="max-width:420px;margin-top:16px">
+  <h3>Your access</h3>
+  <div class="muted">{{ 'Full administrator access.' if user.is_admin else (user.permissions | join(', ')) or 'No permissions assigned.' }}</div>
+</div>
+{% endif %}
+{% endblock %}
+{% block scripts %}
+<script>
+async function change() {
+  const err = document.getElementById('err'); err.style.display = 'none';
+  try {
+    await postJSON('/api/account/password', {
+      current_password: document.getElementById('cur').value,
+      new_password: document.getElementById('new').value,
+    });
+    toast('Password updated');
+    document.getElementById('cur').value = ''; document.getElementById('new').value = '';
+  } catch (e) { err.textContent = e.message; err.style.display = 'block'; }
+}
+</script>
+{% endblock %}

@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% block title %}Users · Cognex Monitor{% endblock %}
+{% block content %}
+<div class="toolbar">
+  <div><h1>Users</h1><p class="lead">Create accounts and choose exactly what each user can access.</p></div>
+  <button class="btn" onclick="openForm()">+ Add user</button>
+</div>
+<table>
+  <thead><tr><th>Username</th><th>Role</th><th>Access</th><th>Status</th><th></th></tr></thead>
+  <tbody id="rows"></tbody>
+</table>
+
+<div class="modal-back" id="modal"><div class="modal">
+  <h2 id="modalTitle">Add user</h2>
+  <div id="formError" class="error" style="display:none"></div>
+  <input type="hidden" id="u_id" />
+  <label>Username</label><input id="u_name" />
+  <label id="pwLabel">Password</label><input id="u_pass" type="password" />
+  <label style="display:flex;align-items:center;gap:8px;margin-top:14px"><input type="checkbox" id="u_admin" style="width:auto" onchange="toggleAdmin()"/> Administrator (full access)</label>
+  <div id="permWrap">
+    <label>Permissions</label>
+    <div class="checks" id="perms">
+      {% for key, label in all_permissions.items() %}
+      <label><input type="checkbox" value="{{ key }}" class="perm"/> {{ label }}</label>
+      {% endfor %}
+    </div>
+  </div>
+  <label style="display:flex;align-items:center;gap:8px;margin-top:14px"><input type="checkbox" id="u_active" checked style="width:auto"/> Active</label>
+  <div class="actions" style="margin-top:20px;justify-content:flex-end">
+    <button class="btn secondary" onclick="closeModal('modal')">Cancel</button>
+    <button class="btn" onclick="save()">Save</button>
+  </div>
+</div></div>
+{% endblock %}
+{% block scripts %}
+<script>
+const ME = {{ user.id }};
+
+function toggleAdmin() {
+  document.getElementById('permWrap').style.display = document.getElementById('u_admin').checked ? 'none' : 'block';
+}
+
+async function load() {
+  const users = await getJSON('/api/users');
+  const rows = document.getElementById('rows'); rows.innerHTML = '';
+  for (const u of users) {
+    const access = u.is_admin ? el('span', { class: 'muted' }, 'All') : el('span', { class: 'muted' }, (u.permissions || []).join(', ') || 'none');
+    rows.append(el('tr', {},
+      el('td', {}, el('strong', {}, u.username), u.id === ME ? el('span', { class: 'muted' }, '  (you)') : null),
+      el('td', {}, el('span', { class: 'badge ' + (u.is_admin ? 'warn' : 'off') }, u.is_admin ? 'admin' : 'user')),
+      el('td', {}, access),
+      el('td', {}, el('span', { class: 'badge ' + (u.is_active ? 'ok' : 'bad') }, u.is_active ? 'active' : 'disabled')),
+      el('td', {}, el('div', { class: 'actions' },
+        el('button', { class: 'btn secondary small', onclick: () => openForm(u) }, 'Edit'),
+        u.id === ME ? null : el('button', { class: 'btn danger small', onclick: () => remove(u) }, 'Delete'))),
+    ));
+  }
+}
+
+function openForm(u) {
+  document.getElementById('formError').style.display = 'none';
+  document.getElementById('modalTitle').textContent = u ? 'Edit user' : 'Add user';
+  document.getElementById('u_id').value = u ? u.id : '';
+  document.getElementById('u_name').value = u ? u.username : '';
+  document.getElementById('u_name').disabled = !!u;
+  document.getElementById('u_pass').value = '';
+  document.getElementById('pwLabel').textContent = u ? 'New password (leave blank to keep)' : 'Password';
+  document.getElementById('u_admin').checked = u ? u.is_admin : false;
+  document.getElementById('u_active').checked = u ? u.is_active : true;
+  const perms = (u && u.permissions) || [];
+  document.querySelectorAll('.perm').forEach(cb => { cb.checked = perms.includes(cb.value); });
+  toggleAdmin();
+  openModal('modal');
+}
+
+async function save() {
+  const err = document.getElementById('formError'); err.style.display = 'none';
+  try {
+    const id = document.getElementById('u_id').value;
+    const isAdmin = document.getElementById('u_admin').checked;
+    const permissions = isAdmin ? [] : Array.from(document.querySelectorAll('.perm:checked')).map(c => c.value);
+    const pass = document.getElementById('u_pass').value;
+    if (id) {
+      const body = { is_admin: isAdmin, is_active: document.getElementById('u_active').checked, permissions };
+      if (pass) body.password = pass;
+      await patchJSON('/api/users/' + id, body);
+    } else {
+      if (!pass) throw new Error('Password is required');
+      await postJSON('/api/users', {
+        username: document.getElementById('u_name').value.trim(),
+        password: pass, is_admin: isAdmin, permissions,
+      });
+    }
+    closeModal('modal'); load();
+  } catch (e) { err.textContent = e.message; err.style.display = 'block'; }
+}
+async function remove(u) { if (confirm('Delete user "' + u.username + '"?')) { try { await delJSON('/api/users/' + u.id); load(); } catch (e) { toast(e.message, true); } } }
+
+load();
+</script>
+{% endblock %}

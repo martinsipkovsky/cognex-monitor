@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Dashboard · Cognex Monitor{% endblock %}
+{% block content %}
+<div class="toolbar">
+  <div>
+    <h1>Dashboard</h1>
+    <p class="lead">Live pass/fail counters across all cameras. Grayed cameras are not in production. Click a camera for its OK/NOK chart.</p>
+  </div>
+  <button class="btn secondary small" onclick="load()">Refresh now</button>
+</div>
+<div id="cards" class="grid"></div>
+{% endblock %}
+{% block scripts %}
+<script>
+async function load() {
+  const cards = document.getElementById('cards');
+  let data;
+  try { data = await getJSON('/api/data/summary'); }
+  catch (e) { cards.innerHTML = ''; cards.append(el('div', { class: 'empty' }, e.message)); return; }
+  cards.innerHTML = '';
+  if (!data.length) { cards.append(el('div', { class: 'empty' }, 'No cameras configured yet. Add one under Cameras.')); return; }
+  for (const d of data) {
+    const dot = d.connected ? 'ok' : (d.enabled ? 'bad' : 'off');
+    const job = d.active_job;
+    const body = [];
+    body.push(el('h3', {}, el('span', { class: 'dot ' + dot }), d.name,
+      el('span', { class: 'badge ' + PROD_BADGE[d.production_state][0], style: 'margin-left:auto' }, PROD_BADGE[d.production_state][1])));
+    body.push(el('div', { class: 'muted' }, d.protocol + (d.current_job ? ' · job ' + d.current_job : '')));
+    if (job) {
+      const total = job.total_count || (job.total_pass + job.total_fail);
+      const kp = el('div', { class: 'kpis' },
+        el('div', { class: 'kpi' }, el('div', { class: 'label' }, 'Pass'), el('div', { class: 'value pass' }, String(job.total_pass))),
+        el('div', { class: 'kpi' }, el('div', { class: 'label' }, 'Fail'), el('div', { class: 'value fail' }, String(job.total_fail))),
+        el('div', { class: 'kpi' }, el('div', { class: 'label' }, 'Scrap'), el('div', { class: 'value ' + scrapClass(job.scrap_rate) }, fmtPct(job.scrap_rate))),
+      );
+      body.push(kp);
+      const m = el('div', { class: 'meter' }); m.append(el('span', { style: 'width:' + Math.min(100, job.scrap_rate * 100) + '%;background:var(--' + (scrapClass(job.scrap_rate) === 'pass' ? 'ok' : scrapClass(job.scrap_rate) === 'warn' ? 'warn' : 'bad') + ')' }));
+      body.push(m);
+      body.push(el('div', { class: 'muted', style: 'margin-top:8px' }, 'Total parts: ' + total));
+    } else {
+      body.push(el('div', { class: 'muted', style: 'margin-top:12px' }, d.last_error ? ('Error: ' + d.last_error) : 'Waiting for first reading…'));
+    }
+    if (d.production_state === 'idle') body.push(el('div', { class: 'muted', style: 'margin-top:4px' }, idleText(d)));
+    cards.append(el('a', { class: 'card clickable' + (d.in_production ? '' : ' not-producing'), href: '/camera/' + d.id }, ...body));
+  }
+}
+load();
+setInterval(load, 5000);
+</script>
+{% endblock %}

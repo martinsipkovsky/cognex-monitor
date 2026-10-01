@@ -1,0 +1,85 @@
+# Development
+
+## Running locally without Docker
+
+Needs Python 3.11 or newer. Without `DATABASE_URL` the app uses a local SQLite
+file (`cognex.db`), so no Postgres is needed.
+
+```bash
+python -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+POLL_ENABLED=false uvicorn app.main:app --reload
+```
+
+Leave out `POLL_ENABLED=false` to run the background poller too.
+
+## Tests
+
+```bash
+pytest -q
+```
+
+Or run them inside the Docker image, with no local Python setup:
+
+```bash
+docker build -t cognex-monitor:test .
+docker run --rm -v "$(pwd)/tests:/srv/tests" -e POLL_ENABLED=false \
+  cognex-monitor:test python -m pytest -q /srv/tests
+```
+
+On Windows Git Bash, prefix the `docker run` with `MSYS_NO_PATHCONV=1` and use
+`$(pwd -W)` instead of `$(pwd)`.
+
+The tests cover the counter logic, production state, the SLMP frames, the TCP
+and UDP listeners, and the API end to end. They use simulated devices only.
+
+## Project layout
+
+```
+app/
+  main.py            FastAPI app, startup, schema creation, poller start
+  config.py          settings from environment variables
+  database.py        engine, session, schema creation and column migration
+  dbconfig.py        database choice saved by the Database tab
+  models.py          User, Device, CounterState, Reading, Notification*
+  counters.py        reset-proof accumulation (pure, unit-tested)
+  production.py      running / idle / stopped state per camera
+  poller.py          background poll loop and one-shot poll
+  notifications.py   rule evaluation and dispatch
+  auth.py            password hashing and signed session cookies
+  dependencies.py    login and permission checks
+  seed.py            first admin account
+  templating.py      Jinja2 setup, cache-busted static URLs
+  protocols/         one file per camera protocol
+  notifiers/         one file per notification transport
+  routers/           auth, account, users, devices, data, notifications,
+                     database_admin, pages
+  templates/         dark-mode Jinja2 pages
+  static/            style.css, app.js
+deploy/              compose file and .env template for a prebuilt image
+tests/               pytest suite
+```
+
+Static files are linked as `/static/<file>?v=<content hash>`, so browsers load
+the new `app.js` and `style.css` after every update instead of a cached copy.
+
+## Adding a protocol
+
+1. Create `app/protocols/<name>.py` with a class derived from
+   `ProtocolDriver` (`app/protocols/base.py`). Set `key`, `label` and
+   `config_fields`, and implement `read()` returning a `counters.Sample`
+   (job name plus raw pass/fail counters). Raise `ProtocolError` on failure.
+2. Register the class in `_DRIVERS` in `app/protocols/__init__.py`.
+3. For a push protocol, set `push = True` and follow `tcp_listener.py`.
+
+The UI picks up the new protocol and its config fields automatically.
+
+## Publishing an image
+
+Multi-architecture build and push:
+
+```bash
+docker buildx build --platform linux/amd64,linux/arm64 \
+  -t <your-registry>/cognex-monitor:latest --push .
+```

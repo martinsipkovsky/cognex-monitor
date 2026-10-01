@@ -1,0 +1,80 @@
+// Small fetch helpers shared by every page.
+async function api(method, url, body) {
+  const opts = { method, headers: {} };
+  if (body !== undefined) {
+    opts.headers['Content-Type'] = 'application/json';
+    opts.body = JSON.stringify(body);
+  }
+  const resp = await fetch(url, opts);
+  if (resp.status === 204) return null;
+  let data = null;
+  try { data = await resp.json(); } catch (e) { /* no body */ }
+  if (!resp.ok) {
+    const msg = (data && (data.detail || data.message)) || resp.statusText;
+    throw new Error(typeof msg === 'string' ? msg : JSON.stringify(msg));
+  }
+  return data;
+}
+const getJSON = (u) => api('GET', u);
+const postJSON = (u, b) => api('POST', u, b);
+const patchJSON = (u, b) => api('PATCH', u, b);
+const delJSON = (u) => api('DELETE', u);
+
+function el(tag, attrs = {}, ...children) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === 'class') node.className = v;
+    else if (k === 'html') node.innerHTML = v;
+    else if (k.startsWith('on') && typeof v === 'function') node.addEventListener(k.slice(2), v);
+    else if (v !== null && v !== undefined) node.setAttribute(k, v);
+  }
+  for (const c of children) {
+    if (c === null || c === undefined) continue;
+    node.append(c.nodeType ? c : document.createTextNode(c));
+  }
+  return node;
+}
+
+function fmtPct(x) { return (x * 100).toFixed(1) + '%'; }
+function scrapClass(rate) { return rate >= 0.05 ? 'fail' : (rate >= 0.02 ? 'warn' : 'pass'); }
+
+function openModal(id) { document.getElementById(id).classList.add('open'); }
+function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+
+function parseJSONField(text, fallback) {
+  const t = (text || '').trim();
+  if (!t) return fallback;
+  try { return JSON.parse(t); } catch (e) { throw new Error('Invalid JSON in config: ' + e.message); }
+}
+
+function toast(msg, isErr) {
+  const t = el('div', { class: 'error', style:
+    'position:fixed;bottom:20px;right:20px;z-index:100;max-width:360px;' +
+    (isErr ? '' : 'background:rgba(34,197,94,.12);border-color:rgba(34,197,94,.4);color:#bbf7d0;') }, msg);
+  document.body.append(t);
+  setTimeout(() => t.remove(), 4000);
+}
+
+// Production state badges shared by the dashboard and the camera view.
+const PROD_BADGE = {
+  running: ['ok', 'In production'],
+  idle: ['off', 'Not in production'],
+  stopped: ['warn', 'Stopped'],
+};
+function fmtAgo(iso) {
+  if (!iso) return 'never';
+  const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+  if (s < 90) return Math.round(s) + ' s ago';
+  if (s < 5400) return Math.round(s / 60) + ' min ago';
+  if (s < 172800) return Math.round(s / 3600) + ' h ago';
+  return Math.round(s / 86400) + ' days ago';
+}
+function idleText(d) {
+  return 'No pass increase for ' + d.idle_timeout_min + ' min (last ' + fmtAgo(d.last_pass_change_at) + ')';
+}
+function downloadJSON(filename, data) {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const a = el('a', { href: URL.createObjectURL(blob), download: filename });
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}

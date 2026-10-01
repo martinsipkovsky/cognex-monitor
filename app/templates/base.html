@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{% block title %}Cognex Monitor{% endblock %}</title>
+  <link rel="stylesheet" href="{{ static_url('style.css') }}" />
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">Cognex<span> Monitor</span></div>
+      <nav class="nav">
+        {% if user.has_permission('view_dashboard') %}
+        <a href="/" class="{{ 'active' if page=='dashboard' }}">Dashboard</a>
+        <a href="/devices" class="{{ 'active' if page=='devices' }}">Cameras</a>
+        {% endif %}
+        {% if user.has_permission('view_data') %}
+        <a href="/data" class="{{ 'active' if page=='data' }}">Data log</a>
+        {% endif %}
+        {% if user.has_permission('manage_notifications') %}
+        <a href="/notifications" class="{{ 'active' if page=='notifications' }}">Notifications</a>
+        {% endif %}
+        {% if user.has_permission('manage_users') %}
+        <a href="/users" class="{{ 'active' if page=='users' }}">Users</a>
+        {% endif %}
+        {% if user.is_admin %}
+        <a href="/database" class="{{ 'active' if page=='database' }}">Database</a>
+        {% endif %}
+      </nav>
+      <div class="spacer"></div>
+      <div class="userbox">
+        <div style="color:var(--text); font-weight:600;">{{ user.username }}</div>
+        <div>{{ 'Administrator' if user.is_admin else 'User' }}</div>
+        <div style="margin-top:8px;"><a href="/account">Account</a> · <a href="/logout">Sign out</a></div>
+      </div>
+    </aside>
+    <main class="main">
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+  <script src="{{ static_url('app.js') }}"></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>
