@@ -1,0 +1,178 @@
+{% extends "base.html" %}
+{% block title %}Scrap statistics · Cognex Monitor{% endblock %}
+{% block content %}
+<div class="toolbar">
+  <div><h1>Scrap statistics</h1><p class="lead">Pass, fail and scrap for a date range, overall, per camera, per job and per day.</p></div>
+</div>
+
+<div class="card" style="margin-bottom:16px">
+  <div class="row">
+    <div style="flex:0 0 auto">
+      <label style="margin-top:0">Range</label>
+      <div class="seg" id="quick">
+        <button data-range="month" class="on">Current month</button><button data-range="1">Today</button><button data-range="7">Last 7 days</button><button data-range="30">Last 30 days</button><button data-range="custom">Custom</button>
+      </div>
+    </div>
+    <div style="flex:0 0 160px"><label style="margin-top:0">From</label><input type="date" id="sFrom" /></div>
+    <div style="flex:0 0 160px"><label style="margin-top:0">To</label><input type="date" id="sTo" /></div>
+    <div style="flex:0 0 auto" class="actions">
+      <button class="btn secondary" onclick="loadScrap()">Refresh</button>
+      <button class="btn" id="xlsxBtn" onclick="downloadXlsx()">Download Excel</button>
+    </div>
+  </div>
+  <div class="hint" style="margin-top:8px">Parts are counted from the reading history, like the OK/NOK chart in the camera view. Scrap = fail / (pass + fail).
+    Parts from excluded readings and from times a camera was not in production (idle or stopped) are left out. Days follow this browser's time zone (<span id="tzName"></span>).</div>
+</div>
+<div id="scrapError" class="error" style="display:none"></div>
+
+<div class="grid" style="grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); margin-bottom:12px">
+  <div class="card"><div class="muted">Pass</div><div class="stat value pass" id="oPass">—</div></div>
+  <div class="card"><div class="muted">Fail</div><div class="stat value fail" id="oFail">—</div></div>
+  <div class="card"><div class="muted">Total parts</div><div class="stat" id="oTotal">—</div></div>
+  <div class="card"><div class="muted">Scrap</div><div class="stat" id="oScrap">—</div><div class="muted" id="oPeriod"></div></div>
+</div>
+<p class="hint" id="leftOut" style="margin:0 0 24px"></p>
+
+<div class="section">
+  <h2>Per camera</h2>
+  <table><thead><tr><th>Camera</th><th>Pass</th><th>Fail</th><th>Total</th><th>Scrap</th></tr></thead>
+  <tbody id="camRows"></tbody></table>
+  <div id="camEmpty" class="empty" style="display:none">No cameras configured.</div>
+</div>
+<div class="section">
+  <h2>Per job</h2>
+  <table><thead><tr><th>Camera</th><th>Job</th><th>Pass</th><th>Fail</th><th>Total</th><th>Scrap</th></tr></thead>
+  <tbody id="jobRows"></tbody></table>
+  <div id="jobEmpty" class="empty" style="display:none">No parts counted in this range.</div>
+</div>
+<div class="section">
+  <h2>Per day</h2>
+  <table><thead><tr><th>Day</th><th>Pass</th><th>Fail</th><th>Total</th><th>Scrap</th><th style="width:30%"></th></tr></thead>
+  <tbody id="dayRows"></tbody></table>
+</div>
+
+{% if user.has_permission('exclude_readings') %}
+<div class="section" id="excludeSection">
+  <h2>Exclude a time period</h2>
+  <p class="hint" style="margin-top:0">Leaves every reading of the camera in this period out of the statistics, for example a test run or a setup with bad parts. Include again takes them back. Single readings can be excluded in the <a href="/data">Data log</a>.</p>
+  <div class="row">
+    <div><label>Camera</label><select id="exDevice"><option value="">All cameras</option></select></div>
+    <div><label>From</label><input type="datetime-local" id="exFrom" /></div>
+    <div><label>To</label><input type="datetime-local" id="exTo" /></div>
+    <div style="flex:0 0 auto" class="actions">
+      <button class="btn danger" onclick="excludePeriod(true)">Exclude</button>
+      <button class="btn secondary" onclick="excludePeriod(false)">Include again</button>
+    </div>
+  </div>
+</div>
+{% endif %}
+{% endblock %}
+{% block scripts %}
+<script>
+const TZ = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+document.getElementById('tzName').textContent = TZ;
+function ymd(d) { return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
+function setQuick(range) {
+  document.querySelectorAll('#quick button').forEach(b => b.classList.toggle('on', b.dataset.range === range));
+  if (range === 'custom') return;
+  const to = new Date(), from = new Date();
+  if (range === 'month') from.setDate(1);
+  else from.setDate(from.getDate() - (+range - 1));
+  document.getElementById('sFrom').value = ymd(from);
+  document.getElementById('sTo').value = ymd(to);
+}
+document.querySelectorAll('#quick button').forEach(b => b.addEventListener('click', () => { setQuick(b.dataset.range); loadScrap(); }));
+['sFrom', 'sTo'].forEach(id => document.getElementById(id).addEventListener('change', () => { setQuick('custom'); loadScrap(); }));
+
+function rangeQuery() {
+  const f = document.getElementById('sFrom').value, t = document.getElementById('sTo').value;
+  if (!f || !t) throw new Error('Pick both a from and a to date.');
+  return 'from=' + f + '&to=' + t + '&tz=' + encodeURIComponent(TZ);
+}
+function scrapBadge(rate, total) {
+  if (!total) return el('span', { class: 'muted' }, '—');
+  const c = scrapClass(rate);
+  return el('span', { class: 'badge ' + (c === 'pass' ? 'ok' : c === 'warn' ? 'warn' : 'bad') }, fmtPct(rate));
+}
+function numCells(r) {
+  return [el('td', {}, r.pass.toLocaleString()), el('td', {}, r.fail.toLocaleString()),
+          el('td', {}, r.total.toLocaleString()), el('td', {}, scrapBadge(r.scrap_rate, r.total))];
+}
+function fill(id, rows, emptyId, cells) {
+  const tb = document.getElementById(id); tb.innerHTML = '';
+  if (emptyId) document.getElementById(emptyId).style.display = rows.length ? 'none' : 'block';
+  rows.forEach(r => tb.append(el('tr', {}, ...cells(r))));
+}
+function partsText(r) { return r.pass.toLocaleString() + ' pass / ' + r.fail.toLocaleString() + ' fail'; }
+async function loadScrap() {
+  const err = document.getElementById('scrapError');
+  let s;
+  try { s = await getJSON('/api/data/scrap?' + rangeQuery()); err.style.display = 'none'; }
+  catch (e) { err.textContent = e.message; err.style.display = 'block'; return; }
+  const o = s.overall;
+  document.getElementById('oPass').textContent = o.pass.toLocaleString();
+  document.getElementById('oFail').textContent = o.fail.toLocaleString();
+  document.getElementById('oTotal').textContent = o.total.toLocaleString();
+  const os = document.getElementById('oScrap');
+  os.textContent = o.total ? fmtPct(o.scrap_rate) : '—';
+  os.className = 'stat value ' + (o.total ? scrapClass(o.scrap_rate) : '');
+  document.getElementById('oPeriod').textContent = s.from === s.to ? s.from : s.from + ' to ' + s.to;
+  const ex = s.left_out.excluded, np = s.left_out.not_in_production;
+  document.getElementById('leftOut').textContent = 'Left out: ' + partsText(np) + ' while not in production; ' +
+    partsText(ex) + ' from ' + ex.readings.toLocaleString() + ' excluded reading' + (ex.readings === 1 ? '' : 's') + '.';
+  fill('camRows', s.per_camera, 'camEmpty', r => [el('td', {}, r.camera), ...numCells(r)]);
+  fill('jobRows', s.per_job, 'jobEmpty', r => [el('td', {}, r.camera), el('td', {}, r.job), ...numCells(r)]);
+  const maxTotal = Math.max(1, ...s.per_day.map(r => r.total));
+  fill('dayRows', s.per_day.slice().reverse(), null, r => {
+    const bar = el('div', { class: 'daybar', title: partsText(r) });
+    bar.append(el('span', { style: 'width:' + (100 * r.pass / maxTotal) + '%;background:var(--ok)' }),
+               el('span', { style: 'width:' + (100 * r.fail / maxTotal) + '%;background:var(--bad)' }));
+    const d = new Date(r.day + 'T00:00:00');
+    return [el('td', {}, d.toLocaleDateString([], { weekday: 'short', year: 'numeric', month: '2-digit', day: '2-digit' })), ...numCells(r), el('td', {}, bar)];
+  });
+}
+async function downloadXlsx() {
+  const btn = document.getElementById('xlsxBtn');
+  btn.disabled = true;
+  try {
+    const resp = await fetch('/api/data/scrap.xlsx?' + rangeQuery());
+    if (!resp.ok) {
+      let m = resp.statusText;
+      try { m = (await resp.json()).detail || m; } catch (e) { /* no body */ }
+      throw new Error(m);
+    }
+    const name = (resp.headers.get('Content-Disposition') || '').match(/filename="([^"]+)"/);
+    const a = el('a', { href: URL.createObjectURL(await resp.blob()), download: name ? name[1] : 'scrap.xlsx' });
+    document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  } catch (e) { toast(e.message, true); }
+  finally { btn.disabled = false; }
+}
+
+async function initExclude() {
+  if (!document.getElementById('excludeSection')) return;
+  const devices = await getJSON('/api/devices');
+  document.getElementById('exDevice').append(...devices.map(d => el('option', { value: d.id }, d.name)));
+}
+async function excludePeriod(excluded) {
+  const f = document.getElementById('exFrom').value, t = document.getElementById('exTo').value;
+  if (!f || !t) { toast('Pick the start and end of the period.', true); return; }
+  const sel = document.getElementById('exDevice');
+  const who = sel.value ? sel.selectedOptions[0].textContent : 'all cameras';
+  const when = new Date(f).toLocaleString() + ' to ' + new Date(t).toLocaleString();
+  if (excluded && !confirm('Exclude every reading of ' + who + ' from ' + when + ' from the scrap statistics?')) return;
+  try {
+    const r = await postJSON('/api/data/readings/exclude', {
+      excluded, device_id: sel.value ? +sel.value : null,
+      start: new Date(f).toISOString(), end: new Date(t).toISOString(),
+    });
+    toast(r.changed.toLocaleString() + ' reading' + (r.changed === 1 ? '' : 's') + (excluded ? ' excluded.' : ' included again.'));
+    loadScrap();
+  } catch (e) { toast(e.message, true); }
+}
+
+setQuick('month');
+loadScrap();
+initExclude().catch(() => {});
+</script>
+{% endblock %}

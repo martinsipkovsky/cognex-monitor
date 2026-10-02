@@ -46,6 +46,7 @@ PERMISSIONS = {
     "manage_devices": "Create, edit and delete camera devices",
     "control_connections": "Start/stop camera connections and polling",
     "view_data": "Browse logged readings and counters",
+    "exclude_readings": "Exclude readings from the scrap statistics",
     "manage_notifications": "Configure notification rules and providers",
     "manage_users": "Create users and edit their permissions",
 }
@@ -178,6 +179,13 @@ class Reading(Base):
 
     # everything else the protocol returned (jobname, custom tags, ...)
     extra: Mapped[dict] = mapped_column(JSON, default=dict)
+
+    # Scrap statistics: the parts counted since the previous reading are left
+    # out when the reading is excluded by a user, or when the camera was not
+    # in production (idle or stopped, see app.production) at that moment.
+    # in_production is None for readings logged before it was recorded.
+    excluded: Mapped[bool] = mapped_column(Boolean, default=False)
+    in_production: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
 
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, index=True

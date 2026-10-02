@@ -17,6 +17,7 @@
         {% endif %}
         {% if user.has_permission('view_data') %}
         <a href="/data" class="{{ 'active' if page=='data' }}">Data log</a>
+        <a href="/scrap" class="{{ 'active' if page=='scrap' }}">Scrap statistics</a>
         {% endif %}
         {% if user.has_permission('manage_notifications') %}
         <a href="/notifications" class="{{ 'active' if page=='notifications' }}">Notifications</a>

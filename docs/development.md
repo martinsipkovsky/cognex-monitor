@@ -51,6 +51,7 @@ app/
   models.py          User, Device, CounterState, Reading, Notification*
   counters.py        reset-proof accumulation (pure, unit-tested)
   production.py      running / idle / stopped state per camera
+  scrap_stats.py     scrap statistics for a date range, Excel export
   poller.py          background poll loop and one-shot poll
   notifications.py   rule evaluation and dispatch
   auth.py            password hashing and signed session cookies

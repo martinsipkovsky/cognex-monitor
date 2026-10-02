@@ -6,6 +6,7 @@ import datetime as dt
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from .. import production, scrap_stats
@@ -118,6 +119,7 @@ def device_view(
 @router.get("/readings")
 def readings(
     device_id: int | None = None,
+    excluded: bool | None = None,
     limit: int = 100,
     db: Session = Depends(get_db),
     _: User = Depends(require_permission("view_data")),
@@ -125,6 +127,8 @@ def readings(
     q = db.query(Reading)
     if device_id is not None:
         q = q.filter(Reading.device_id == device_id)
+    if excluded is not None:
+        q = q.filter(Reading.excluded.is_(True) if excluded else Reading.excluded.isnot(True))
     rows = q.order_by(Reading.created_at.desc()).limit(min(limit, 1000)).all()
     return [
         {
@@ -135,10 +139,57 @@ def readings(
             "raw_fail": r.raw_fail,
             "total_pass": r.total_pass,
             "total_fail": r.total_fail,
+            "excluded": bool(r.excluded),
+            "in_production": r.in_production,
             "created_at": r.created_at,
         }
         for r in rows
     ]
+
+
+class ExcludeOne(BaseModel):
+    excluded: bool
+
+
+class ExcludePeriod(BaseModel):
+    excluded: bool
+    start: dt.datetime
+    end: dt.datetime
+    device_id: int | None = None  # None = all cameras
+
+
+@router.patch("/readings/{reading_id}")
+def exclude_reading(
+    reading_id: int,
+    payload: ExcludeOne,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_permission("exclude_readings")),
+):
+    """Leave one reading's parts out of the scrap statistics, or take them back."""
+    r = db.get(Reading, reading_id)
+    if not r:
+        raise HTTPException(404, "Reading not found")
+    r.excluded = payload.excluded
+    db.commit()
+    return {"id": r.id, "excluded": r.excluded}
+
+
+@router.post("/readings/exclude")
+def exclude_period(
+    payload: ExcludePeriod,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_permission("exclude_readings")),
+):
+    """Exclude (or include again) every reading in a time period."""
+    start, end = _aware(payload.start), _aware(payload.end)
+    if end <= start:
+        raise HTTPException(400, "The end must be after the start")
+    q = db.query(Reading).filter(Reading.created_at >= start, Reading.created_at < end)
+    if payload.device_id is not None:
+        q = q.filter(Reading.device_id == payload.device_id)
+    changed = q.update({Reading.excluded: payload.excluded}, synchronize_session=False)
+    db.commit()
+    return {"changed": changed}
 
 
 _MAX_RANGE_DAYS = 366

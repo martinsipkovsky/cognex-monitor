@@ -100,6 +100,7 @@ def record_sample(db: Session, device: Device, sample: Sample) -> Reading:
         total_pass=state.total_pass,
         total_fail=state.total_fail,
         extra=sample.extra or {},
+        in_production=production.in_production(device),
     )
     db.add(reading)
 

@@ -64,21 +64,31 @@ Opening a camera shows an OK/NOK chart over 1 hour, 8 hours, 24 hours or
 - **Start** clears a manual stop and restarts the idle clock. A camera that
   still doesn't count goes idle again after its timeout.
 
-## Data tab
+## Data log
 
-The Data log page has two tabs. Anyone with the "Browse logged readings and
-counters" permission sees both.
+The running totals per camera and job, and the raw reading history, as stored
+in the database. Each reading shows whether its parts count in the scrap
+statistics:
 
-**Counters & readings** shows the running totals per camera and job, and the
-raw reading history, as stored in the database.
+- **counted**: included.
+- **not in production**: taken while the camera was idle or stopped, so left
+  out.
+- **excluded**: left out by a user.
 
-**Scrap statistics** shows pass, fail, total parts and scrap % for a date
-range:
+Users with the `exclude_readings` permission get an **Exclude** button on each
+reading, and **Include** to take it back. Choose **Excluded readings only** to
+find them again.
+
+## Scrap statistics
+
+Pass, fail, total parts and scrap % for a date range. It is in the left panel
+for anyone with the `view_data` permission.
 
 - Pick **Current month** (the default), **Today**, **Last 7 days** or
   **Last 30 days**, or set your own **From** and **To** dates (both days
   included, up to a year).
-- The figures are shown overall, per camera, per job and per day.
+- The figures are shown overall, per camera, per job and per day. A line under
+  the totals says how many parts were left out, and why.
 - **Download Excel** saves an .xlsx file with the same figures as the screen,
   one sheet each for Overall, Per camera, Per job and Per day.
 
@@ -88,6 +98,20 @@ fail / (pass + fail). Days are calendar days in the time zone of the browser
 you are using. Parts a camera had already counted before the app first saw a
 job are not included, so the figures can be a little lower than the running
 totals.
+
+These parts are left out:
+
+- **Not in production:** parts counted while the camera was idle (no pass
+  increase within its idle timeout) or stopped by an operator, the same state
+  the dashboard grays out. For readings logged before this was recorded
+  (before October 2026) only the idle rule is applied, using the camera's
+  current idle timeout.
+- **Excluded readings:** readings a user excluded, one at a time in the Data
+  log or for a whole period under **Exclude a time period** on this page.
+  Pick a camera (or all cameras) and a start and end time, then press
+  **Exclude**. **Include again** with the same period takes them back.
+  Excluding a reading drops only the parts counted since the reading before
+  it.
 
 ## Notifications tab
 
@@ -105,7 +129,8 @@ assign permissions. The last administrator can't be deleted.
 | `view_dashboard` | View dashboards and camera data, export camera settings |
 | `manage_devices` | Create, edit, delete and import cameras |
 | `control_connections` | Start/stop camera connections, polling and production |
-| `view_data` | Browse logged readings and counters |
+| `view_data` | Browse logged readings and counters, scrap statistics |
+| `exclude_readings` | Exclude readings from the scrap statistics |
 | `manage_notifications` | Configure notification rules and providers |
 | `manage_users` | Create users and edit their permissions |
 

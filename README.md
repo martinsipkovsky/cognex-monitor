@@ -30,6 +30,9 @@ permissions, and PostgreSQL storage, shipped as a Docker image.
   alarms.
 - **Camera view:** an OK/NOK chart over 1 h, 8 h, 24 h or 7 days, plus manual
   Start/Stop of production.
+- **Scrap statistics:** pass, fail and scrap % for any date range, overall,
+  per camera, per job and per day, with an Excel export. Time out of
+  production and readings a user excluded are left out.
 - **Alerts:** scrap rate, fail count and disconnect rules with a cooldown,
   delivered through pluggable providers (webhook, Green API, Meta Cloud API).
 - **Users and permissions:** login required, with granular permissions per user.
