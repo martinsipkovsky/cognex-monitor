@@ -1,42 +1,99 @@
 # Notifications
 
-Alerts are configured on the *Notifications* tab in two parts: **rules** decide
-when to alert, **providers** decide where the message goes.
+Alerts are set up on the *Notifications* tab in three parts:
+
+- **Providers** are destinations: one WhatsApp group, one Telegram chat, one
+  webhook. Add one provider per group or chat.
+- **Rules** decide **what** is sent, **how urgent** it is and **to which
+  providers**.
+- The **WhatsApp phone** box links the app to your phone, for the `linked`
+  WhatsApp provider.
+
+Every message and its delivery result is recorded in the alert log at the
+bottom of the tab.
 
 ## Rules
 
-| Condition | Fires when |
-|---|---|
-| `scrap_rate` | The current job's scrap rate (fail / total) reaches the threshold, e.g. `0.05` for 5% |
-| `fail_count` | The current job's fail count reaches the threshold |
-| `disconnected` | The camera can't be read or has gone offline |
+| Send when | Kind | Fires |
+|---|---|---|
+| Scrap rate ≥ threshold | state | The current job's scrap rate (as shown on the dashboard) reaches the threshold. Entered in %, e.g. `5` |
+| Fail (NOK) count ≥ threshold | state | The current job's NOK count (as shown on the dashboard) reaches the threshold |
+| Camera disconnected or read error | state | The camera can't be read or has gone offline |
+| Camera stopped, idle or back in production | event | A camera's [production state](user-guide.md#production-state) changes |
+| Camera changed job | event | A camera reports a new job name |
+| FTP backup failed / FTP backup finished | event | An automatic or *Run now* FTP backup ends |
+| App started or updated | event | The app starts; after an image update the message says which version it was updated from. Sent about a minute after startup, so a linked WhatsApp has reconnected |
 
-A rule can apply to one camera or to all of them. Its **cooldown** (default
-300 seconds) stops the same rule from firing again too soon.
+For each rule you choose:
+
+- **Camera**: one camera or all cameras (camera conditions only).
+- **Level**: ℹ️ INFO, ⚠️ WARNING or 🚨 ALERT. It is put in front of the
+  message, e.g. `⚠️ WARNING · High scrap on 'Line 1' …`.
+- **Threshold** for scrap and fail-count rules. A rule for **all cameras**
+  can set a different threshold for individual cameras ("Per camera"); an
+  empty box uses the rule's threshold.
+- **Send to**: tick the providers that get the message. With none ticked it
+  goes to every enabled provider (rules made before this option existed work
+  that way, so they keep sending after an update).
+- **Cooldown**: state rules fire again after this many seconds while the
+  condition still holds (default 300). Event rules fire each time the event
+  happens; a cooldown only limits how often.
+
+Rules can be edited, disabled and enabled again without deleting them.
+
+Typical setup: a *warning* rule at 3 % scrap to the shift group, an *alert*
+rule at 5 % to the shift group and the maintenance group, disconnects to
+maintenance only, and backup and app messages to an admin chat.
 
 Scrap-rate and fail-count rules are suppressed while a camera is idle or
-manually stopped (see [Production state](user-guide.md#production-state)).
-Disconnect alerts are always sent.
+manually stopped. They use the counters shown on the dashboard, so
+**Reset counters** on the camera view also clears them.
 
-Every alert and its delivery result is recorded in the alert log.
+## WhatsApp
 
-## Providers
+The WhatsApp provider (`app/notifiers/whatsapp.py`) has four transports. Use
+**Test send** after adding a provider to confirm delivery.
 
-The WhatsApp provider lives in `app/notifiers/whatsapp.py` and has three
-transports. Use **Test send** after adding one to confirm delivery.
+### `linked`: send from your own number (no extra service)
 
-### Important: WhatsApp groups need a gateway you run
+> **Unofficial.** The app logs in to WhatsApp as a *linked device* of your
+> phone, the same way WhatsApp Web does, using the open-source
+> [neonize](https://github.com/krypton-byte/neonize) / whatsmeow library.
+> WhatsApp does not allow unofficial clients and can **restrict or ban a
+> number** that uses one. A few alert messages a day are low risk, but a spare
+> number (a cheap SIM, or WhatsApp Business on a second number) is safest.
 
-Meta's official WhatsApp Cloud API **cannot post into a normal WhatsApp group
-chat**; there is no official API for that. To alert a group you need a
-WhatsApp gateway service that is logged into a WhatsApp account that is a
-member of the group. **You have to set up and run that gateway yourself**
-(or rent one); this app does not include one.
+1. On the Notifications tab, press **Link phone** in the *WhatsApp phone* box.
+   A QR code appears.
+2. On the phone open WhatsApp → **Settings → Linked devices → Link a device**
+   and scan the code. It changes every 20 seconds; the page keeps it current.
+   After about 3 minutes without a scan it expires; press **Link phone** again.
+3. The box shows **Linked** and the number. Press **Show groups**, then
+   **Send alerts here** next to a group. That adds a provider for the group.
 
-### `webhook` (recommended)
+The phone must be a member of every group it sends to. Messages appear as sent
+by that number. To send to one person instead, use their number with country
+code (digits only) as `to`:
 
-POSTs the message as JSON to any HTTP endpoint. Point it at your self-hosted
-gateway (for example one built on whatsapp-web.js, Baileys or WAHA).
+```json
+{"transport": "linked", "to": "120363012345678901@g.us"}
+{"transport": "linked", "to": ["421900123456", "120363012345678901@g.us"]}
+```
+
+The login is stored in the app's own PostgreSQL database (tables starting with
+`whatsmeow_`), so it survives restarts and image updates. The phone does not
+have to stay online, but WhatsApp logs out linked devices when the phone has
+not been used for about 14 days. **Log out** in the box, or removing *Cognex
+Monitor* from the phone's Linked devices, unlinks it. If the connection drops,
+the app reconnects by itself and the box shows the error meanwhile.
+
+The client runs in a separate process in the app container. Its log lines are
+in `docker compose logs web`, starting with `whatsapp`.
+
+### `webhook`
+
+POSTs the message as JSON to any HTTP endpoint, for example a self-hosted
+gateway built on whatsapp-web.js, Baileys or WAHA.
 
 ```json
 {"transport": "webhook", "url": "http://gateway:3000/send",
@@ -55,17 +112,43 @@ Uses the third-party [Green API](https://green-api.com) group-send endpoint.
 
 ### `cloud_api`
 
-Meta's official Cloud API. Sends to **one phone number only**, not a group.
+Meta's official Cloud API. Sends to **one phone number only**, not a group;
+Meta's API can't post to WhatsApp groups.
 
 ```json
 {"transport": "cloud_api", "token": "...", "phone_number_id": "...",
  "to": "<recipient number>"}
 ```
 
-Provider credentials are stored in the app's database. Protect database
-access and backups accordingly.
+## Telegram
 
-## Adding a provider
+The Telegram provider (`app/notifiers/telegram.py`) posts through a bot,
+which is Telegram's official way to do this.
+
+1. In Telegram, talk to **@BotFather**, send `/newbot` and copy the token it
+   gives (looks like `123456789:AAH...`).
+2. Add the bot to the group (or open a chat with the bot and press *Start*).
+3. Find the chat id: send any message in the group, then open
+   `https://api.telegram.org/bot<token>/getUpdates` in a browser and look for
+   `"chat":{"id":...}`. Group ids are negative, e.g. `-1001234567890`. A public
+   channel can be given as `@channelname` (the bot must be an admin there).
+4. Add a provider of kind **Telegram**:
+
+```json
+{"bot_token": "123456789:AAH...", "chat_ids": ["-1001234567890"]}
+```
+
+`chat_ids` can list several chats; each gets the message. Add
+`"silent": true` to send without a notification sound. **Test send** shows
+Telegram's own error if something is wrong ("chat not found" means the bot is
+not in that chat).
+
+## Credentials
+
+Provider settings, including tokens, are stored in the app's database and are
+part of backups. Protect database access and backup files accordingly.
+
+## Adding a provider type
 
 Notifiers follow the same one-file pattern as protocols: add a file in
 `app/notifiers/` implementing the `Notifier` base class and register it in

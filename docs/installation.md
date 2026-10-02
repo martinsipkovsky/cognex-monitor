@@ -68,6 +68,36 @@ docker compose up -d
 `pull_policy: always` makes `docker compose up -d` fetch the newest image each
 time, so updating the server is the same command.
 
+## Updating
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
+An update replaces only the app container. Everything else is kept:
+
+- users, cameras, counters, readings and notification rules are in the
+  PostgreSQL database (`db_data` volume, or the server chosen on the Database
+  tab);
+- the WhatsApp login is in the same bundled PostgreSQL database;
+- the database choice and the FTP backup settings are files in `/srv/data`
+  (the `app_data` volume) **and** a copy in the bundled PostgreSQL database.
+  If the files are missing when the new container starts (a compose file
+  without the `app_data` volume, or `docker compose down` and `up`), the app
+  puts them back from the copy; the log says "restored it from the database
+  copy".
+
+If a saved database server is not reachable when the app starts, it retries
+for about a minute before falling back to the bundled database (the Database
+tab then says so). `GET /healthz` shows the running version.
+
+Versions before 1.2.0 did not keep that copy. If your server's compose file has
+no `app_data` volume (check for `app_data:/srv/data` under `web:`), copy the
+current `deploy/docker-compose.yml` before updating; otherwise the database
+choice and FTP settings have to be entered once more after this one update,
+and are kept from then on.
+
 ## Ports and firewall
 
 | Port | Protocol | Used by |
@@ -96,7 +126,7 @@ Two Docker volumes hold everything that must survive an update:
 | Volume | Contents |
 |---|---|
 | `db_data` | The bundled PostgreSQL database: users, cameras, counters, readings, alerts |
-| `app_data` | `/srv/data` in the app container: the database choice and FTP backup settings saved on the Database tab, and backups taken before an import |
+| `app_data` | `/srv/data` in the app container: the database choice and FTP backup settings saved on the Database tab (also copied into `db_data`), and backups taken before an import |
 
 The easiest backup is on the Database tab: **Download backup**, or the
 automatic backup to an FTP server (see [Configuration](configuration.md#backups-database-tab)).
@@ -120,5 +150,5 @@ database; changing them later has no effect. Change the password under
 
 ## Health check
 
-`GET /healthz` returns 200 when the app is up. The image's Docker
+`GET /healthz` returns 200 and the app version when the app is up. The image's Docker
 `HEALTHCHECK` uses it.

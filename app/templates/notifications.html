@@ -2,17 +2,38 @@
 {% block title %}Notifications · Cognex Monitor{% endblock %}
 {% block content %}
 <h1>Notifications</h1>
-<p class="lead">Send alerts to a WhatsApp group (or any webhook) on high scrap, fail counts or disconnects.</p>
+<p class="lead">Send alerts to WhatsApp, Telegram (or any webhook) on high scrap, fail counts or disconnects.</p>
 
 <div class="section">
-  <div class="toolbar"><h2 style="border:none">Providers</h2><button class="btn small" onclick="openModal('provModal')">+ Add provider</button></div>
-  <table><thead><tr><th>Name</th><th>Kind</th><th>Enabled</th><th></th></tr></thead><tbody id="provRows"></tbody></table>
+  <div class="toolbar"><h2 style="border:none">WhatsApp phone</h2><div class="actions" id="waActions"></div></div>
+  <div class="card" id="waCard">
+    <div id="waState" class="muted">Loading…</div>
+    <div id="waQr" style="display:none;margin-top:12px">
+      <img id="waQrImg" alt="WhatsApp QR code" style="background:#fff;border-radius:8px;width:240px;height:240px;image-rendering:pixelated" />
+      <ol class="muted" style="margin:10px 0 0 18px;padding:0;line-height:1.6">
+        <li>On your phone open WhatsApp, then <strong>Settings → Linked devices → Link a device</strong>.</li>
+        <li>Point the phone at this QR code. It changes every 20 seconds; the page keeps it current.</li>
+      </ol>
+    </div>
+    <div id="waGroups" style="display:none;margin-top:14px">
+      <table><thead><tr><th>Group</th><th>Group id</th><th></th></tr></thead><tbody id="waGroupRows"></tbody></table>
+    </div>
+    <p class="hint" style="margin-top:12px">Unofficial: the app logs in as a linked device of your phone (like WhatsApp Web) and sends from your number.
+      WhatsApp does not allow unofficial clients and can restrict or ban numbers that use one; a spare number is safest.</p>
+  </div>
+</div>
+
+<div class="section">
+  <div class="toolbar"><h2 style="border:none">Providers</h2><button class="btn small" onclick="newProvider()">+ Add provider</button></div>
+  <p class="hint" style="margin:-4px 0 10px">A provider is one destination: a WhatsApp group, a Telegram chat, a webhook. Rules pick which providers get their messages.</p>
+  <table><thead><tr><th>Name</th><th>Kind</th><th>Sends to</th><th>Enabled</th><th></th></tr></thead><tbody id="provRows"></tbody></table>
   <div id="provEmpty" class="empty" style="display:none">No providers. Add one to deliver alerts.</div>
 </div>
 
 <div class="section">
-  <div class="toolbar"><h2 style="border:none">Rules</h2><button class="btn small" onclick="openModal('ruleModal')">+ Add rule</button></div>
-  <table><thead><tr><th>Name</th><th>Camera</th><th>Condition</th><th>Threshold</th><th>Cooldown</th><th>Enabled</th><th></th></tr></thead><tbody id="ruleRows"></tbody></table>
+  <div class="toolbar"><h2 style="border:none">Rules</h2><button class="btn small" onclick="newRule()">+ Add rule</button></div>
+  <p class="hint" style="margin:-4px 0 10px">A rule decides what is sent (scrap, faults, production changes, system events), how urgent it is, and to which providers.</p>
+  <table><thead><tr><th>Name</th><th>Sends</th><th>Camera</th><th>Threshold</th><th>Level</th><th>To</th><th>Cooldown</th><th>Enabled</th><th></th></tr></thead><tbody id="ruleRows"></tbody></table>
   <div id="ruleEmpty" class="empty" style="display:none">No rules yet.</div>
 </div>
 
@@ -24,7 +45,7 @@
 
 <!-- provider modal -->
 <div class="modal-back" id="provModal"><div class="modal">
-  <h2>Add provider</h2>
+  <h2 id="provTitle">Add provider</h2>
   <div id="provError" class="error" style="display:none"></div>
   <label>Name</label><input id="p_name" placeholder="Production WhatsApp group" />
   <label>Kind</label><select id="p_kind" onchange="onKind()"></select>
@@ -42,19 +63,27 @@
 
 <!-- rule modal -->
 <div class="modal-back" id="ruleModal"><div class="modal">
-  <h2>Add rule</h2>
+  <h2 id="ruleTitle">Add rule</h2>
   <div id="ruleError" class="error" style="display:none"></div>
   <label>Name</label><input id="r_name" placeholder="High scrap alert" />
-  <label>Camera</label><select id="r_device"><option value="">All cameras</option></select>
-  <label>Condition</label>
-  <select id="r_condition" onchange="onCond()">
-    <option value="scrap_rate">Scrap rate ≥ threshold (fraction, e.g. 0.05 = 5%)</option>
-    <option value="fail_count">Fail count ≥ threshold</option>
-    <option value="disconnected">Camera disconnected</option>
-  </select>
+  <label>Send when</label><select id="r_condition" onchange="onCond(true)"></select>
   <div class="row">
-    <div><label>Threshold</label><input id="r_threshold" type="number" step="any" value="0.05" /></div>
-    <div><label>Cooldown (s)</label><input id="r_cooldown" type="number" value="300" /></div>
+    <div id="r_deviceBox"><label>Camera</label><select id="r_device" onchange="onCond(false)"><option value="">All cameras</option></select></div>
+    <div><label>Level</label><select id="r_severity"></select></div>
+  </div>
+  <div class="row" id="r_thresholdBox">
+    <div><label id="r_thresholdLabel">Threshold</label><input id="r_threshold" type="number" step="any" min="0" /></div>
+    <div></div>
+  </div>
+  <div id="r_overrides" style="display:none">
+    <label>Per camera (empty = the threshold above)</label>
+    <div id="r_overrideRows" class="grid" style="grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px"></div>
+  </div>
+  <label>Send to</label>
+  <div id="r_providers" class="hint"></div>
+  <div class="row">
+    <div><label>Cooldown (s)</label><input id="r_cooldown" type="number" min="0" value="300" /><div class="hint" id="r_cooldownHint">Minimum time between two messages from this rule.</div></div>
+    <div><label>Enabled</label><select id="r_enabled"><option value="1">Yes</option><option value="0">No</option></select></div>
   </div>
   <div class="actions" style="margin-top:18px;justify-content:flex-end">
     <button class="btn secondary" onclick="closeModal('ruleModal')">Cancel</button>
@@ -64,47 +93,202 @@
 {% endblock %}
 {% block scripts %}
 <script>
-let KINDS = [], DEVICES = [];
+let KINDS = [], DEVICES = [], lastExample = null;
 
 function onKind() {
   const p = KINDS.find(k => k.key === document.getElementById('p_kind').value);
   document.getElementById('p_help').innerHTML = p
     ? Object.entries(p.config_fields).map(([k, v]) => `<div><code>${k}</code> — ${v}</div>`).join('') : '';
+  // swap in the kind's example unless the user has typed their own config
+  const cfg = document.getElementById('p_config');
+  if (p && p.config_example && Object.keys(p.config_example).length && (lastExample === null || cfg.value === lastExample)) {
+    cfg.value = JSON.stringify(p.config_example, null, 2);
+    lastExample = cfg.value;
+  }
 }
-function onCond() {
-  const c = document.getElementById('r_condition').value;
-  document.getElementById('r_threshold').value = c === 'scrap_rate' ? 0.05 : (c === 'fail_count' ? 10 : 0);
+
+// ---- linked WhatsApp phone ----
+let waTimer = null;
+async function waLoad() {
+  let s;
+  try { s = await getJSON('/api/notifications/whatsapp'); } catch (e) { return; }
+  const state = document.getElementById('waState'), acts = document.getElementById('waActions');
+  const qr = document.getElementById('waQr');
+  acts.innerHTML = '';
+  qr.style.display = s.state === 'qr' && s.qr ? 'block' : 'none';
+  if (s.qr) document.getElementById('waQrImg').src = s.qr;
+  const badge = (cls, text) => el('span', { class: 'badge ' + cls, style: 'margin-right:8px' }, text);
+  state.innerHTML = '';
+  if (s.state === 'connected') {
+    state.append(badge('ok', 'Linked'), 'Sending from +' + (s.phone || '?') + (s.name ? ' (' + s.name + ')' : '') + '.');
+    acts.append(el('button', { class: 'btn secondary small', onclick: waGroups }, 'Show groups'),
+      el('button', { class: 'btn danger small', onclick: waLogout }, 'Log out'));
+  } else if (s.state === 'qr') {
+    state.append(badge('warn', 'Waiting for scan'), 'Scan the QR code with the phone whose number should send the alerts.');
+    acts.append(el('button', { class: 'btn secondary small', onclick: waCancel }, 'Cancel'));
+  } else if (s.state === 'starting') {
+    state.append(badge('warn', 'Connecting'), 'Starting the WhatsApp client…');
+  } else {
+    if (s.state === 'error') state.append(badge('bad', 'Error'));
+    else state.append(badge('off', 'Not linked'));
+    state.append(s.error || 'No phone is linked. Press Link phone and scan the QR code with WhatsApp.');
+    acts.append(el('button', { class: 'btn small', onclick: waLink }, 'Link phone'));
+  }
+  if (s.state !== 'connected') document.getElementById('waGroups').style.display = 'none';
+  clearTimeout(waTimer);
+  waTimer = setTimeout(waLoad, s.state === 'qr' || s.state === 'starting' ? 2000 : 8000);
 }
+async function waLink() { try { await postJSON('/api/notifications/whatsapp/link'); } catch (e) { toast(e.message, true); } waLoad(); }
+async function waCancel() { try { await postJSON('/api/notifications/whatsapp/cancel'); } catch (e) { toast(e.message, true); } waLoad(); }
+async function waLogout() {
+  if (!confirm('Log out the linked phone? WhatsApp alerts stop until a phone is linked again.')) return;
+  try { await postJSON('/api/notifications/whatsapp/logout'); toast('Logged out'); } catch (e) { toast(e.message, true); }
+  waLoad();
+}
+async function waGroups() {
+  const box = document.getElementById('waGroups'), rows = document.getElementById('waGroupRows');
+  rows.innerHTML = ''; box.style.display = 'block';
+  rows.append(el('tr', {}, el('td', { colspan: 3, class: 'muted' }, 'Loading groups…')));
+  let groups;
+  try { groups = await getJSON('/api/notifications/whatsapp/groups'); }
+  catch (e) { rows.innerHTML = ''; rows.append(el('tr', {}, el('td', { colspan: 3, class: 'muted' }, e.message))); return; }
+  rows.innerHTML = '';
+  if (!groups.length) rows.append(el('tr', {}, el('td', { colspan: 3, class: 'muted' }, 'This number is in no groups.')));
+  for (const g of groups) rows.append(el('tr', {},
+    el('td', {}, g.name), el('td', {}, el('code', {}, g.id)),
+    el('td', {}, el('button', { class: 'btn secondary small', onclick: () => waUseGroup(g) }, 'Send alerts here'))));
+}
+async function waUseGroup(g) {
+  try {
+    await postJSON('/api/notifications/providers', {
+      name: 'WhatsApp: ' + g.name, kind: 'whatsapp', enabled: true,
+      config: { transport: 'linked', to: g.id },
+    });
+    toast('Provider added. Use Test send to try it.'); load();
+  } catch (e) { toast(e.message, true); }
+}
+let CONDS = [], SEVS = [], PROVIDERS = [], editingRule = null, editingProvider = null;
+const condOf = key => CONDS.find(c => c.key === key) || {};
+const isPct = key => key === 'scrap_rate';
+const fmtThreshold = (key, v) => isPct(key) ? (+(v * 100).toFixed(2)) + '%' : String(v);
+
+function providerTarget(p) {
+  const c = p.config || {};
+  if (p.kind === 'telegram') return 'chat ' + [].concat(c.chat_ids || c.chat_id || []).join(', ');
+  if (c.transport === 'linked') return [].concat(c.to || []).join(', ');
+  return c.transport || '';
+}
+
+// show the inputs the chosen condition needs
+function onCond(fromCondition) {
+  const key = document.getElementById('r_condition').value, c = condOf(key);
+  document.getElementById('r_deviceBox').style.visibility = c.camera ? 'visible' : 'hidden';
+  document.getElementById('r_thresholdBox').style.display = c.threshold ? '' : 'none';
+  document.getElementById('r_thresholdLabel').textContent = isPct(key) ? 'Threshold (%)' : 'Threshold (' + (c.threshold || '') + ')';
+  const name = document.getElementById('r_name');
+  if (fromCondition) {
+    document.getElementById('r_severity').value = c.severity || 'alert';
+    document.getElementById('r_threshold').value = key === 'scrap_rate' ? 5 : (key === 'fail_count' ? 10 : 0);
+    document.getElementById('r_cooldown').value = c.event ? 0 : 300;
+    if (!name.value || name.dataset.auto) { name.value = c.label || ''; name.dataset.auto = '1'; }
+  }
+  document.getElementById('r_cooldownHint').textContent = c.event
+    ? 'Sent once each time it happens; a cooldown limits how often.'
+    : 'Sent again after this long while the condition still holds.';
+  const all = !document.getElementById('r_device').value;
+  document.getElementById('r_overrides').style.display = c.threshold && c.camera && all && DEVICES.length ? '' : 'none';
+}
+
+function fillRuleForm(r) {
+  editingRule = r ? r.id : null;
+  document.getElementById('ruleTitle').textContent = r ? 'Edit rule' : 'Add rule';
+  document.getElementById('ruleError').style.display = 'none';
+  const name = document.getElementById('r_name');
+  name.value = r ? r.name : ''; name.dataset.auto = r ? '' : '1';
+  name.oninput = () => { name.dataset.auto = ''; };
+  const cond = r ? r.condition : 'scrap_rate';
+  document.getElementById('r_condition').value = cond;
+  document.getElementById('r_device').value = r && r.device_id ? r.device_id : '';
+  onCond(!r);
+  if (r) {
+    document.getElementById('r_severity').value = r.severity || 'alert';
+    document.getElementById('r_threshold').value = isPct(cond) ? +(r.threshold * 100).toFixed(4) : r.threshold;
+    document.getElementById('r_cooldown').value = r.cooldown;
+  }
+  document.getElementById('r_enabled').value = r && !r.enabled ? '0' : '1';
+  const ov = document.getElementById('r_overrideRows'); ov.innerHTML = '';
+  const t = (r && r.thresholds) || {};
+  for (const d of DEVICES) {
+    const v = t[String(d.id)];
+    ov.append(el('div', {}, el('div', { class: 'hint' }, d.name),
+      el('input', { type: 'number', step: 'any', min: '0', 'data-device': d.id,
+        value: v === undefined || v === null ? '' : (isPct(cond) ? +(v * 100).toFixed(4) : v) })));
+  }
+  const box = document.getElementById('r_providers'); box.innerHTML = '';
+  const chosen = new Set((r && r.provider_ids) || []);
+  if (!PROVIDERS.length) box.append('No providers yet. Add one under Providers first.');
+  for (const p of PROVIDERS) {
+    const cb = el('input', { type: 'checkbox', 'data-provider': p.id, style: 'width:auto;margin:0' });
+    cb.checked = chosen.has(p.id);
+    box.append(el('label', { style: 'display:flex;gap:8px;align-items:center;margin:4px 0;font-weight:normal' }, cb,
+      p.name + ' (' + p.kind + (providerTarget(p) ? ': ' + providerTarget(p) : '') + ')' + (p.enabled ? '' : ' · disabled')));
+  }
+  if (PROVIDERS.length) box.append(el('div', { class: 'hint' }, 'None ticked = every enabled provider.'));
+}
+function newRule() { fillRuleForm(null); openModal('ruleModal'); }
+function editRule(r) { fillRuleForm(r); openModal('ruleModal'); }
 
 async function load() {
-  KINDS = await getJSON('/api/notifications/notifier-kinds');
-  DEVICES = await getJSON('/api/devices');
-  document.getElementById('p_kind').innerHTML = KINDS.map(k => `<option value="${k.key}">${k.label}</option>`).join('');
-  document.getElementById('r_device').innerHTML = '<option value="">All cameras</option>' + DEVICES.map(d => `<option value="${d.id}">${d.name}</option>`).join('');
-  onKind();
+  // filled once: refilling every few seconds would reset an open dialog
+  if (!KINDS.length) {
+    KINDS = await getJSON('/api/notifications/notifier-kinds');
+    DEVICES = await getJSON('/api/devices');
+    const meta = await getJSON('/api/notifications/conditions');
+    CONDS = meta.conditions; SEVS = meta.severities;
+    document.getElementById('p_kind').innerHTML = KINDS.map(k => `<option value="${k.key}">${k.label}</option>`).join('');
+    document.getElementById('r_device').innerHTML = '<option value="">All cameras</option>' + DEVICES.map(d => `<option value="${d.id}">${d.name}</option>`).join('');
+    const groups = [...new Set(CONDS.map(c => c.group))];
+    document.getElementById('r_condition').innerHTML = groups.map(g => `<optgroup label="${g}">` +
+      CONDS.filter(c => c.group === g).map(c => `<option value="${c.key}">${c.label}</option>`).join('') + '</optgroup>').join('');
+    document.getElementById('r_severity').innerHTML = SEVS.map(v => `<option value="${v.key}">${v.label}</option>`).join('');
+    onKind();
+  }
 
-  const provs = await getJSON('/api/notifications/providers');
+  PROVIDERS = await getJSON('/api/notifications/providers');
   const pr = document.getElementById('provRows'); pr.innerHTML = '';
-  document.getElementById('provEmpty').style.display = provs.length ? 'none' : 'block';
-  for (const p of provs) pr.append(el('tr', {},
-    el('td', {}, p.name), el('td', {}, p.kind),
+  document.getElementById('provEmpty').style.display = PROVIDERS.length ? 'none' : 'block';
+  for (const p of PROVIDERS) pr.append(el('tr', {},
+    el('td', {}, p.name), el('td', {}, p.kind), el('td', { class: 'muted' }, providerTarget(p)),
     el('td', {}, el('span', { class: 'badge ' + (p.enabled ? 'ok' : 'off') }, p.enabled ? 'on' : 'off')),
     el('td', {}, el('div', { class: 'actions' },
       el('button', { class: 'btn secondary small', onclick: () => testProvider(p.id) }, 'Test send'),
+      el('button', { class: 'btn secondary small', onclick: () => editProvider(p) }, 'Edit'),
+      el('button', { class: 'btn secondary small', onclick: () => toggle('providers', p) }, p.enabled ? 'Disable' : 'Enable'),
       el('button', { class: 'btn danger small', onclick: () => delProvider(p.id) }, 'Delete'))),
   ));
 
   const rules = await getJSON('/api/notifications/rules');
   const rr = document.getElementById('ruleRows'); rr.innerHTML = '';
   document.getElementById('ruleEmpty').style.display = rules.length ? 'none' : 'block';
+  const sevBadge = { info: 'off', warning: 'warn', alert: 'bad' };
   for (const r of rules) {
-    const dev = r.device_id ? (DEVICES.find(d => d.id === r.device_id) || {}).name || ('#' + r.device_id) : 'All';
+    const c = condOf(r.condition);
+    const dev = !c.camera ? '—' : r.device_id ? (DEVICES.find(d => d.id === r.device_id) || {}).name || ('#' + r.device_id) : 'All';
+    const overrides = Object.keys(r.thresholds || {}).length;
+    const to = (r.provider_ids || []).length
+      ? r.provider_ids.map(id => (PROVIDERS.find(p => p.id === id) || { name: '#' + id + ' (deleted)' }).name).join(', ')
+      : 'All providers';
     rr.append(el('tr', {},
-      el('td', {}, r.name), el('td', {}, dev), el('td', {}, r.condition),
-      el('td', {}, r.condition === 'scrap_rate' ? fmtPct(r.threshold) : String(r.threshold)),
+      el('td', {}, r.name), el('td', {}, c.label || r.condition), el('td', {}, dev),
+      el('td', {}, c.threshold ? fmtThreshold(r.condition, r.threshold) + (overrides ? ' (+' + overrides + ' per camera)' : '') : '—'),
+      el('td', {}, el('span', { class: 'badge ' + (sevBadge[r.severity] || 'off') }, r.severity || 'alert')),
+      el('td', { class: 'muted' }, to),
       el('td', {}, r.cooldown + 's'),
       el('td', {}, el('span', { class: 'badge ' + (r.enabled ? 'ok' : 'off') }, r.enabled ? 'on' : 'off')),
-      el('td', {}, el('button', { class: 'btn danger small', onclick: () => delRule(r.id) }, 'Delete')),
+      el('td', {}, el('div', { class: 'actions' },
+        el('button', { class: 'btn secondary small', onclick: () => editRule(r) }, 'Edit'),
+        el('button', { class: 'btn secondary small', onclick: () => toggle('rules', r) }, r.enabled ? 'Disable' : 'Enable'),
+        el('button', { class: 'btn danger small', onclick: () => delRule(r.id) }, 'Delete'))),
     ));
   }
 
@@ -119,38 +303,77 @@ async function load() {
   ));
 }
 
+function newProvider() {
+  editingProvider = null;
+  document.getElementById('provTitle').textContent = 'Add provider';
+  document.getElementById('provError').style.display = 'none';
+  document.getElementById('p_name').value = '';
+  document.getElementById('p_kind').disabled = false;
+  lastExample = document.getElementById('p_config').value;
+  onKind();
+  openModal('provModal');
+}
+function editProvider(p) {
+  editingProvider = p.id;
+  document.getElementById('provTitle').textContent = 'Edit provider';
+  document.getElementById('provError').style.display = 'none';
+  document.getElementById('p_name').value = p.name;
+  document.getElementById('p_kind').value = p.kind;
+  document.getElementById('p_kind').disabled = true;
+  document.getElementById('p_config').value = JSON.stringify(p.config || {}, null, 2);
+  lastExample = '';
+  const k = KINDS.find(k => k.key === p.kind);
+  document.getElementById('p_help').innerHTML = k ? Object.entries(k.config_fields).map(([a, b]) => `<div><code>${a}</code> — ${b}</div>`).join('') : '';
+  openModal('provModal');
+}
 async function saveProvider() {
   const err = document.getElementById('provError'); err.style.display = 'none';
   try {
-    await postJSON('/api/notifications/providers', {
+    const body = {
       name: document.getElementById('p_name').value.trim(),
-      kind: document.getElementById('p_kind').value,
       config: parseJSONField(document.getElementById('p_config').value, {}),
-      enabled: true,
-    });
+    };
+    if (editingProvider) await patchJSON('/api/notifications/providers/' + editingProvider, body);
+    else await postJSON('/api/notifications/providers', { ...body, kind: document.getElementById('p_kind').value, enabled: true });
     closeModal('provModal'); load();
   } catch (e) { err.textContent = e.message; err.style.display = 'block'; }
 }
 async function saveRule() {
   const err = document.getElementById('ruleError'); err.style.display = 'none';
   try {
-    const dev = document.getElementById('r_device').value;
-    await postJSON('/api/notifications/rules', {
-      name: document.getElementById('r_name').value.trim(),
-      device_id: dev ? parseInt(dev, 10) : null,
-      condition: document.getElementById('r_condition').value,
-      threshold: parseFloat(document.getElementById('r_threshold').value) || 0,
-      cooldown: parseInt(document.getElementById('r_cooldown').value, 10) || 300,
-      enabled: true,
+    const cond = document.getElementById('r_condition').value, c = condOf(cond);
+    const dev = c.camera ? document.getElementById('r_device').value : '';
+    const conv = v => isPct(cond) ? v / 100 : v;
+    const thresholds = {};
+    if (c.threshold && !dev) document.querySelectorAll('#r_overrideRows input').forEach(i => {
+      if (i.value !== '') thresholds[i.dataset.device] = conv(parseFloat(i.value));
     });
+    const body = {
+      name: document.getElementById('r_name').value.trim() || c.label,
+      device_id: dev ? parseInt(dev, 10) : null,
+      condition: cond,
+      severity: document.getElementById('r_severity').value,
+      threshold: c.threshold ? conv(parseFloat(document.getElementById('r_threshold').value) || 0) : 0,
+      thresholds,
+      provider_ids: [...document.querySelectorAll('#r_providers input:checked')].map(i => parseInt(i.dataset.provider, 10)),
+      cooldown: Math.max(0, parseInt(document.getElementById('r_cooldown').value, 10) || 0),
+      enabled: document.getElementById('r_enabled').value === '1',
+    };
+    if (editingRule) await patchJSON('/api/notifications/rules/' + editingRule, body);
+    else await postJSON('/api/notifications/rules', body);
     closeModal('ruleModal'); load();
   } catch (e) { err.textContent = e.message; err.style.display = 'block'; }
+}
+async function toggle(kind, item) {
+  try { await patchJSON('/api/notifications/' + kind + '/' + item.id, { enabled: !item.enabled }); } catch (e) { toast(e.message, true); }
+  load();
 }
 async function testProvider(id) { try { await postJSON('/api/notifications/providers/' + id + '/test'); toast('Test sent OK'); load(); } catch (e) { toast(e.message, true); load(); } }
 async function delProvider(id) { if (confirm('Delete provider?')) { await delJSON('/api/notifications/providers/' + id); load(); } }
 async function delRule(id) { if (confirm('Delete rule?')) { await delJSON('/api/notifications/rules/' + id); load(); } }
 
 load();
+waLoad();
 setInterval(load, 8000);
 </script>
 {% endblock %}

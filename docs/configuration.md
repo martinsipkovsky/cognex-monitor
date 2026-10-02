@@ -16,6 +16,7 @@ working directory.
 | `WEB_PORT` | `8000` | Host port for the web UI (compose only) |
 | `LISTEN_PORTS` | `5100-5119` | Port range, TCP and UDP, for cameras that push data |
 | `DATA_DIR` | `./data` (`/srv/data` in Docker) | Where the Database tab saves its settings (database choice, FTP backup settings, backups taken before an import) |
+| `WHATSAPP_ENABLED` | `true` | Reconnect a linked WhatsApp phone when the app starts (see [Notifications](notifications.md#linked-send-from-your-own-number-no-extra-service)) |
 
 Login sessions last 12 hours.
 
@@ -32,9 +33,11 @@ switch to another PostgreSQL server:
 The tab also shows ready-to-copy `docker run` and `docker compose` snippets for
 starting a new PostgreSQL container.
 
-The choice is saved in `DATA_DIR` (the `app_data` volume), so it survives image
-updates. If the saved database can't be reached at startup, the app falls back
-to `DATABASE_URL` so you can still log in and fix it. Removing the saved
+The choice is saved in `DATA_DIR` (the `app_data` volume), with a copy in the
+`DATABASE_URL` database, so it survives image updates (see
+[Updating](installation.md#updating)). If the saved database can't be reached
+at startup, the app retries for about a minute and then falls back to
+`DATABASE_URL` so you can still log in and fix it. Removing the saved
 setting returns the app to `DATABASE_URL` after a restart.
 
 ## Backups (Database tab)
@@ -76,9 +79,13 @@ it) or every N hours, and how many backups to keep on the server.
   run are shown on the tab. A daily run that was missed while the app was
   stopped runs as soon as it is back.
 
+Rules on the Notifications tab can send a message when a backup fails or
+finishes.
+
 The app connects out to the FTP server in passive mode, so no inbound port is
-needed. The FTP password is stored in `DATA_DIR/backup_ftp.json`, like the
-database password; protect the `app_data` volume accordingly.
+needed. The FTP password is stored in `DATA_DIR/backup_ftp.json` and copied
+into the `DATABASE_URL` database (table `app_settings`), like the database
+password; protect the `app_data` and `db_data` volumes accordingly.
 
 ## Schema changes
 

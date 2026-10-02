@@ -69,6 +69,11 @@ function fmtAgo(iso) {
   if (s < 172800) return Math.round(s / 3600) + ' h ago';
   return Math.round(s / 86400) + ' days ago';
 }
+function fmtDateTime(iso) {
+  const d = new Date(iso);
+  const t = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  return d.toDateString() === new Date().toDateString() ? t : d.toLocaleDateString([], { day: '2-digit', month: '2-digit' }) + ' ' + t;
+}
 function idleText(d) {
   return 'No pass increase for ' + d.idle_timeout_min + ' min (last ' + fmtAgo(d.last_pass_change_at) + ')';
 }

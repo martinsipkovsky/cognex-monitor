@@ -240,6 +240,32 @@ def production_stop(
     return _set_production(db, device_id, False)
 
 
+@router.post("/{device_id}/counters/reset")
+def reset_counters(
+    device_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_permission("control_connections")),
+):
+    """Start the counters shown on the dashboard from zero for the current job.
+
+    Nothing is sent to the camera, and the job totals in the readings history
+    and the scrap statistics stay as they are (see CounterState.reset_shown).
+    """
+    device = db.get(Device, device_id)
+    if not device:
+        raise HTTPException(404, "Device not found")
+    state = (
+        db.query(CounterState)
+        .filter(CounterState.device_id == device_id, CounterState.is_active.is_(True))
+        .first()
+    )
+    if state is None:
+        raise HTTPException(400, "This camera has no counters yet")
+    state.reset_shown()
+    db.commit()
+    return {"job_name": state.job_name, "reset_at": state.reset_at}
+
+
 @router.get("/{device_id}/counters")
 def device_counters(
     device_id: int,

@@ -12,6 +12,7 @@ _tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
 _tmp.close()
 os.environ["DATABASE_URL"] = f"sqlite+pysqlite:///{_tmp.name}"
 os.environ["POLL_ENABLED"] = "false"
+os.environ["WHATSAPP_ENABLED"] = "false"
 os.environ["DATA_DIR"] = tempfile.mkdtemp(prefix="cognex-data-")
 os.environ["DEFAULT_ADMIN_USER"] = "Admin"
 os.environ["DEFAULT_ADMIN_PASSWORD"] = "1234"

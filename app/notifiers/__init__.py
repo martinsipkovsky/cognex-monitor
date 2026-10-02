@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 from .base import Notifier, NotifierError
+from .telegram import TelegramNotifier
 from .whatsapp import WhatsAppNotifier
 
-_NOTIFIERS: dict[str, type[Notifier]] = {n.key: n for n in (WhatsAppNotifier,)}
+_NOTIFIERS: dict[str, type[Notifier]] = {n.key: n for n in (WhatsAppNotifier, TelegramNotifier)}
 
 
 def available() -> dict[str, type[Notifier]]:
@@ -13,7 +14,8 @@ def available() -> dict[str, type[Notifier]]:
 
 def describe() -> list[dict]:
     return [
-        {"key": n.key, "label": n.label, "config_fields": n.config_fields}
+        {"key": n.key, "label": n.label, "config_fields": n.config_fields,
+         "config_example": n.config_example}
         for n in _NOTIFIERS.values()
     ]
 

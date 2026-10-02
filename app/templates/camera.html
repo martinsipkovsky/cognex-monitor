@@ -13,7 +13,7 @@
 <div class="grid" style="grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); margin-bottom:16px">
   <div class="card"><div class="muted">Production</div><div id="prodState" class="stat small">—</div><div class="muted" id="prodNote"></div></div>
   <div class="card"><div class="muted">Current job</div><div id="job" class="stat small">—</div><div class="muted" id="conn"></div></div>
-  <div class="card"><div class="muted">Job totals (OK / NOK)</div><div class="stat small"><span id="tPass" class="value pass">0</span> / <span id="tFail" class="value fail">0</span></div><div class="muted" id="tScrap"></div></div>
+  <div class="card"><div class="muted" id="tLabel">Job totals (OK / NOK)</div><div class="stat small"><span id="tPass" class="value pass">0</span> / <span id="tFail" class="value fail">0</span></div><div class="muted" id="tScrap"></div></div>
   <div class="card"><div class="muted" id="winLabel">Last 8 h (OK / NOK)</div><div class="stat small"><span id="wPass" class="value pass">0</span> / <span id="wFail" class="value fail">0</span></div><div class="muted" id="wScrap"></div></div>
 </div>
 
@@ -60,6 +60,14 @@ function renderControls(d) {
   if (d.production_state !== 'stopped') {
     c.append(el('button', { class: 'btn danger', onclick: () => setProduction('stop') }, '■ Stop production'));
   }
+  c.append(el('button', { class: 'btn secondary', onclick: resetCounters }, '↺ Reset counters'));
+}
+
+async function resetCounters() {
+  if (!confirm('Reset the OK / NOK counters shown on the dashboard for this camera to zero?\n\n' +
+    'Nothing is sent to the camera. The readings history, the chart and the scrap statistics stay as they are.')) return;
+  try { await postJSON('/api/devices/' + DEVICE_ID + '/counters/reset'); toast('Counters reset'); load(); }
+  catch (e) { toast(e.message, true); }
 }
 
 async function setProduction(action) {
@@ -137,6 +145,8 @@ async function load() {
   document.getElementById('tPass').textContent = j.total_pass;
   document.getElementById('tFail').textContent = j.total_fail;
   document.getElementById('tScrap').textContent = 'Scrap ' + fmtPct(j.scrap_rate);
+  document.getElementById('tLabel').textContent = j.reset_at
+    ? 'Since reset ' + fmtDateTime(j.reset_at) + ' (OK / NOK)' : 'Job totals (OK / NOK)';
   const h = d.history, wt = h.ok + h.nok;
   document.getElementById('winLabel').textContent = 'Last ' + (HOURS >= 48 ? HOURS / 24 + ' days' : HOURS + ' h') + ' (OK / NOK)';
   document.getElementById('wPass').textContent = h.ok;

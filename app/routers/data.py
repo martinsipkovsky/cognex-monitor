@@ -45,10 +45,12 @@ def _device_summary(db: Session, d: Device) -> dict:
         if active is None
         else {
             "job_name": active.job_name,
-            "total_pass": active.total_pass,
-            "total_fail": active.total_fail,
-            "total_count": active.total_count,
-            "scrap_rate": round(active.scrap_rate, 4),
+            # since the last reset from the dashboard (see CounterState)
+            "total_pass": active.shown_pass,
+            "total_fail": active.shown_fail,
+            "total_count": active.shown_count,
+            "scrap_rate": round(active.shown_scrap_rate, 4),
+            "reset_at": _aware(active.reset_at) if active.reset_at else None,
         },
     }
 

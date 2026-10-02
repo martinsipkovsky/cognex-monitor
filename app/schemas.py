@@ -100,8 +100,25 @@ class RuleCreate(BaseModel):
     device_id: Optional[int] = None
     condition: str
     threshold: float = 0.0
+    # per-camera thresholds for a rule on all cameras: {"<device id>": value}
+    thresholds: Optional[dict[str, Optional[float]]] = None
+    severity: str = "alert"
+    # providers that receive it; empty = all enabled providers
+    provider_ids: list[int] = []
     enabled: bool = True
-    cooldown: int = 300
+    cooldown: int = Field(default=300, ge=0)
+
+
+class RuleUpdate(BaseModel):
+    name: Optional[str] = None
+    device_id: Optional[int] = None
+    condition: Optional[str] = None
+    threshold: Optional[float] = None
+    thresholds: Optional[dict[str, Optional[float]]] = None
+    severity: Optional[str] = None
+    provider_ids: Optional[list[int]] = None
+    enabled: Optional[bool] = None
+    cooldown: Optional[int] = Field(default=None, ge=0)
 
 
 class ProviderCreate(BaseModel):
@@ -109,3 +126,9 @@ class ProviderCreate(BaseModel):
     kind: str
     config: dict = {}
     enabled: bool = True
+
+
+class ProviderUpdate(BaseModel):
+    name: Optional[str] = None
+    config: Optional[dict] = None
+    enabled: Optional[bool] = None

@@ -46,6 +46,7 @@ app/
   config.py          settings from environment variables
   database.py        engine, session, schema creation and column migration
   dbconfig.py        database choice saved by the Database tab
+  settings_store.py  copy of the settings files in the database (survives updates)
   backup.py          backup file format, writing and restoring all data
   backup_ftp.py      FTP/FTPS upload and the automatic backup schedule
   models.py          User, Device, CounterState, Reading, Notification*
@@ -53,13 +54,14 @@ app/
   production.py      running / idle / stopped state per camera
   scrap_stats.py     scrap statistics for a date range, Excel export
   poller.py          background poll loop and one-shot poll
-  notifications.py   rule evaluation and dispatch
+  notifications.py   rule conditions, evaluation, events and routing to providers
   auth.py            password hashing and signed session cookies
   dependencies.py    login and permission checks
   seed.py            first admin account
   templating.py      Jinja2 setup, cache-busted static URLs
   protocols/         one file per camera protocol
-  notifiers/         one file per notification transport
+  notifiers/         one file per notification transport (whatsapp, telegram;
+                     whatsapp_linked runs the linked-phone client process)
   routers/           auth, account, users, devices, data, notifications,
                      database_admin, backup_admin, pages
   templates/         dark-mode Jinja2 pages

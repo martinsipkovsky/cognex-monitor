@@ -32,6 +32,9 @@ from .protocols.udp_listener import UdpListenerManager
 
 log = logging.getLogger("cognex.poller")
 
+# seconds between checks of every camera's production state (notifications)
+PRODUCTION_CHECK_INTERVAL = 30
+
 
 def _handle_sample(db: Session, device: Device, sample: Sample) -> CounterState:
     """Apply a sample to the right CounterState, rotating on job change."""
@@ -89,6 +92,7 @@ def poll_device_once(db: Session, device: Device) -> Reading:
 
 def record_sample(db: Session, device: Device, sample: Sample) -> Reading:
     """Accumulate one sample, log a Reading, mark the device online, notify."""
+    previous_job = device.current_job
     state = _handle_sample(db, device, sample)
 
     reading = Reading(
@@ -110,6 +114,9 @@ def record_sample(db: Session, device: Device, sample: Sample) -> Reading:
     device.current_job = sample.job_name
     db.commit()
 
+    if previous_job is not None and previous_job != sample.job_name:
+        notifications.emit(db, "job_change",
+                           f"Camera '{device.name}' changed job from '{previous_job}' to '{sample.job_name}'", device)
     notifications.evaluate_device(db, device)
     return reading
 
@@ -120,6 +127,7 @@ class Poller:
         self._stop = threading.Event()
         # device_id -> monotonic timestamp of next due poll
         self._next_due: dict[int, float] = {}
+        self._next_production_check = 0.0
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -155,6 +163,14 @@ class Poller:
                     continue
                 self._next_due[device.id] = now + interval
                 self._poll_safe(db, device)
+            if now >= self._next_production_check:
+                # cameras go idle by time, also when no reading comes in
+                self._next_production_check = now + PRODUCTION_CHECK_INTERVAL
+                try:
+                    notifications.check_all_production(db)
+                except Exception:  # noqa: BLE001
+                    db.rollback()
+                    log.exception("production state check failed")
         finally:
             db.close()
 

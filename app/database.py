@@ -7,11 +7,14 @@ The app has full control over its schema: tables are created on startup
 Which database is used: the one an admin saved on the Database page
 (``app.dbconfig``, a file in DATA_DIR) if it is reachable, otherwise
 DATABASE_URL from the environment. A saved database that cannot be reached
-never stops the app from starting; it falls back and the Database page says so.
+never stops the app from starting; it is retried for about a minute (after an
+update the database server may still be starting), then the app falls back and
+the Database page says so.
 """
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Iterator
 
 from sqlalchemy import create_engine, inspect, text
@@ -33,14 +36,24 @@ def make_engine(url: str) -> Engine:
     return create_engine(url, pool_pre_ping=True, connect_args=connect_args)
 
 
+SAVED_DB_ATTEMPTS = 6
+SAVED_DB_RETRY_DELAY = 5  # seconds between attempts (each also waits up to 5 s)
+
+
 def _choose_url() -> tuple[str, str, str | None]:
     """(url, source, fallback_error). source is 'saved' or 'environment'."""
+    if dbconfig.restore_missing():
+        log.warning("database setting was missing from DATA_DIR; restored it from the database copy")
     saved = dbconfig.load()
     if saved:
         url = dbconfig.build_url(saved)
-        ok, err = dbconfig.test_url(url)
-        if ok:
-            return url, "saved", None
+        for attempt in range(1, SAVED_DB_ATTEMPTS + 1):
+            ok, err = dbconfig.test_url(url)
+            if ok:
+                return url, "saved", None
+            log.warning("saved database unreachable (attempt %d of %d): %s", attempt, SAVED_DB_ATTEMPTS, err)
+            if attempt < SAVED_DB_ATTEMPTS:
+                time.sleep(SAVED_DB_RETRY_DELAY)
         log.warning("saved database unreachable, using DATABASE_URL: %s", err)
         return settings.database_url, "environment", err
     return settings.database_url, "environment", None

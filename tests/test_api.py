@@ -113,3 +113,33 @@ def test_notification_rule_fires_to_webhook(client, monkeypatch):
     logs = client.get("/api/notifications/logs").json()
     assert any(l["delivered"] for l in logs), logs
     assert sent, "webhook was not called"
+
+
+def test_reset_counters_only_resets_dashboard_counters(client):
+    login(client)
+    r = client.post("/api/devices", json={
+        "name": "Cam4", "host": "sim", "port": 0, "protocol": "simulator",
+        "protocol_config": {"jobs": ["J"], "parts_per_poll": 10, "fail_ratio": 0.2,
+                            "reset_every": 0, "job_change_every": 0},
+    })
+    did = r.json()["id"]
+    assert client.post(f"/api/devices/{did}/counters/reset").status_code == 400  # no data yet
+    for _ in range(3):
+        client.post(f"/api/devices/{did}/poll")
+    before = client.get(f"/api/devices/{did}/counters").json()[0]
+    assert before["total_count"] > 0
+
+    r = client.post(f"/api/devices/{did}/counters/reset")
+    assert r.status_code == 200, r.text
+    job = client.get("/api/data/summary").json()[0]["active_job"]
+    assert (job["total_pass"], job["total_fail"], job["total_count"]) == (0, 0, 0)
+    assert job["reset_at"]
+
+    client.post(f"/api/devices/{did}/poll")
+    job = client.get("/api/data/summary").json()[0]["active_job"]
+    assert job["total_count"] == 10  # counts again from zero
+    # the job totals behind the history and scrap statistics keep counting
+    after = client.get(f"/api/devices/{did}/counters").json()[0]
+    assert after["total_count"] == before["total_count"] + 10
+    readings = client.get(f"/api/data/readings?device_id={did}").json()
+    assert readings[0]["total_pass"] + readings[0]["total_fail"] == after["total_count"]

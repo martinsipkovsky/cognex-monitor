@@ -29,5 +29,8 @@ class Settings(BaseSettings):
     # volume here in docker so the setting survives container updates.
     data_dir: str = "./data"
 
+    # Start the linked WhatsApp client (if a phone was linked) with the app.
+    whatsapp_enabled: bool = True
+
 
 settings = Settings()

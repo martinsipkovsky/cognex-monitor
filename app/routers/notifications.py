@@ -1,19 +1,19 @@
-"""Notification rules, providers, logs and a test-send endpoint."""
+"""Notification rules, providers, logs, a test-send endpoint and the linked
+WhatsApp phone (QR login, groups, log out)."""
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from .. import notifiers
+from .. import notifications, notifiers
 from ..database import get_db
 from ..dependencies import require_permission
 from ..models import NotificationLog, NotificationProvider, NotificationRule, User
-from ..schemas import ProviderCreate, RuleCreate
+from ..notifiers.base import NotifierError
+from ..notifiers.whatsapp_linked import link as whatsapp_link
+from ..schemas import ProviderCreate, ProviderUpdate, RuleCreate, RuleUpdate
 
 router = APIRouter(prefix="/api/notifications", tags=["notifications"])
-
-_CONDITIONS = {"scrap_rate", "fail_count", "disconnected"}
-
 
 @router.get("/notifier-kinds")
 def notifier_kinds(_: User = Depends(require_permission("manage_notifications"))):
@@ -21,6 +21,24 @@ def notifier_kinds(_: User = Depends(require_permission("manage_notifications"))
 
 
 # ---- rules ----------------------------------------------------------------
+@router.get("/conditions")
+def conditions(_: User = Depends(require_permission("manage_notifications"))):
+    """What a rule can send, and the severities it can be sent with."""
+    return {
+        "conditions": [{"key": k, **v} for k, v in notifications.CONDITIONS.items()],
+        "severities": [{"key": k, "label": v} for k, v in notifications.SEVERITIES.items()],
+    }
+
+
+def _check_rule(data: dict) -> None:
+    if data.get("condition") is not None and data["condition"] not in notifications.CONDITIONS:
+        raise HTTPException(400, f"condition must be one of {sorted(notifications.CONDITIONS)}")
+    if data.get("severity") is not None and data["severity"] not in notifications.SEVERITIES:
+        raise HTTPException(400, f"severity must be one of {sorted(notifications.SEVERITIES)}")
+    if data.get("thresholds"):
+        data["thresholds"] = {str(k): v for k, v in data["thresholds"].items() if v is not None}
+
+
 @router.get("/rules")
 def list_rules(db: Session = Depends(get_db), _: User = Depends(require_permission("manage_notifications"))):
     return db.query(NotificationRule).order_by(NotificationRule.id).all()
@@ -32,10 +50,29 @@ def create_rule(
     db: Session = Depends(get_db),
     _: User = Depends(require_permission("manage_notifications")),
 ):
-    if payload.condition not in _CONDITIONS:
-        raise HTTPException(400, f"condition must be one of {sorted(_CONDITIONS)}")
-    rule = NotificationRule(**payload.model_dump())
+    data = payload.model_dump()
+    _check_rule(data)
+    rule = NotificationRule(**data)
     db.add(rule)
+    db.commit()
+    db.refresh(rule)
+    return rule
+
+
+@router.patch("/rules/{rule_id}")
+def update_rule(
+    rule_id: int,
+    payload: RuleUpdate,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_permission("manage_notifications")),
+):
+    rule = db.get(NotificationRule, rule_id)
+    if not rule:
+        raise HTTPException(404, "Rule not found")
+    data = payload.model_dump(exclude_unset=True)
+    _check_rule(data)
+    for key, value in data.items():
+        setattr(rule, key, value)
     db.commit()
     db.refresh(rule)
     return rule
@@ -71,6 +108,23 @@ def create_provider(
     return provider
 
 
+@router.patch("/providers/{provider_id}")
+def update_provider(
+    provider_id: int,
+    payload: ProviderUpdate,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_permission("manage_notifications")),
+):
+    provider = db.get(NotificationProvider, provider_id)
+    if not provider:
+        raise HTTPException(404, "Provider not found")
+    for key, value in payload.model_dump(exclude_unset=True).items():
+        setattr(provider, key, value)
+    db.commit()
+    db.refresh(provider)
+    return provider
+
+
 @router.delete("/providers/{provider_id}", status_code=204)
 def delete_provider(provider_id: int, db: Session = Depends(get_db), _: User = Depends(require_permission("manage_notifications"))):
     provider = db.get(NotificationProvider, provider_id)
@@ -95,6 +149,48 @@ def test_provider(
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(502, f"Send failed: {exc}") from exc
     return {"ok": True}
+
+
+# ---- linked WhatsApp phone ---------------------------------------------------
+@router.get("/whatsapp")
+def whatsapp_status(_: User = Depends(require_permission("manage_notifications"))):
+    return whatsapp_link.status()
+
+
+@router.post("/whatsapp/link")
+def whatsapp_start_link(_: User = Depends(require_permission("manage_notifications"))):
+    """Start the client; without a linked phone it shows a QR code to scan."""
+    whatsapp_link.start(pair=True)
+    return whatsapp_link.status()
+
+
+@router.post("/whatsapp/cancel")
+def whatsapp_cancel(_: User = Depends(require_permission("manage_notifications"))):
+    """Stop a QR login that is waiting to be scanned."""
+    if whatsapp_link.state == "connected":
+        raise HTTPException(400, "A phone is linked; use Log out to unlink it")
+    whatsapp_link.stop()
+    whatsapp_link.state, whatsapp_link.qr, whatsapp_link.error = "not_linked", None, None
+    whatsapp_link.start()  # a phone linked earlier reconnects; otherwise it exits at once
+    return whatsapp_link.status()
+
+
+@router.post("/whatsapp/logout")
+def whatsapp_logout(_: User = Depends(require_permission("manage_notifications"))):
+    """Unlink the phone: the app disappears from the phone's Linked devices."""
+    try:
+        whatsapp_link.logout()
+    except NotifierError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    return whatsapp_link.status()
+
+
+@router.get("/whatsapp/groups")
+def whatsapp_groups(_: User = Depends(require_permission("manage_notifications"))):
+    try:
+        return whatsapp_link.groups()
+    except NotifierError as exc:
+        raise HTTPException(409, str(exc)) from exc
 
 
 # ---- logs -----------------------------------------------------------------

@@ -3,8 +3,9 @@
 A self-hosted web app that watches Cognex vision cameras in one place. It reads
 each camera's pass/fail counters (by polling it, or by letting the camera push
 its results), keeps **reset-proof running totals** per camera and job, logs
-everything to a database, and sends alerts (for example to a WhatsApp group)
-when scrap is high or a camera drops off the network.
+everything to a database, and sends alerts to WhatsApp or Telegram groups
+when scrap is high, a camera drops off the network, or something else you
+choose happens.
 
 It is a Python/FastAPI app with a dark-mode web UI, logins with per-user
 permissions, and PostgreSQL storage, shipped as a Docker image.
@@ -28,19 +29,25 @@ permissions, and PostgreSQL storage, shipped as a Docker image.
 - **Production state:** a camera that stops counting for its idle timeout is
   shown grayed out and gets no scrap alerts, so idle lines don't cause false
   alarms.
-- **Camera view:** an OK/NOK chart over 1 h, 8 h, 24 h or 7 days, plus manual
-  Start/Stop of production.
+- **Camera view:** an OK/NOK chart over 1 h, 8 h, 24 h or 7 days, manual
+  Start/Stop of production, and **Reset counters** for the dashboard counters
+  (history and statistics are kept).
 - **Scrap statistics:** pass, fail and scrap % for any date range, overall,
   per camera, per job and per day, with an Excel export. Time out of
   production and readings a user excluded are left out.
-- **Alerts:** scrap rate, fail count and disconnect rules with a cooldown,
-  delivered through pluggable providers (webhook, Green API, Meta Cloud API).
+- **Alerts:** rules for scrap rate (with per-camera thresholds), fail count,
+  disconnects, production and job changes, backup results and app updates,
+  each with a level (info / warning / alert) and its own destinations:
+  WhatsApp sent from your own number (linked device, unofficial), Telegram
+  bots, webhooks, Green API or Meta Cloud API.
 - **Users and permissions:** login required, with granular permissions per user.
 - **Camera export/import** as JSON, and an admin **Database tab** to move the
   app to another PostgreSQL server.
 - **Backups:** download all data as one file, import it again, and automatic
   scheduled backups to an FTP/FTPS server, with a reminder when the last
   backup is more than a week old.
+- **Safe updates:** pulling a new image keeps all data and settings, including
+  the database choice, FTP backup settings and the WhatsApp login.
 
 ## Quick start (build from source)
 
@@ -67,7 +74,7 @@ protocol on the Cameras tab.
 | [Configuration](docs/configuration.md) | Environment variables and the Database tab |
 | [User guide](docs/user-guide.md) | Dashboard, cameras, production state, camera view, data, users, export/import |
 | [Protocols](docs/protocols.md) | How to connect each camera type, with every config field |
-| [Notifications](docs/notifications.md) | Alert rules and WhatsApp group delivery |
+| [Notifications](docs/notifications.md) | Alert rules, WhatsApp (linked phone) and Telegram delivery |
 | [Development](docs/development.md) | Running locally, tests, project layout, adding a protocol |
 | [Known issues and limitations](docs/known-issues.md) | What is untested or doesn't work yet |
 

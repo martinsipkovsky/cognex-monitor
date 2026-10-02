@@ -3,7 +3,8 @@
 ## Dashboard
 
 The dashboard shows every camera with its connection state, current job, and
-the running pass/fail totals and scrap rate for that job.
+the running pass/fail totals and scrap rate for that job (since the last
+**Reset counters**, if one was pressed on the camera view).
 
 Cameras that are not in production (see below) are shown **grayed out**.
 Click a camera to open its camera view.
@@ -63,6 +64,12 @@ Opening a camera shows an OK/NOK chart over 1 hour, 8 hours, 24 hours or
   someone presses Start, even if parts are counted.
 - **Start** clears a manual stop and restarts the idle clock. A camera that
   still doesn't count goes idle again after its timeout.
+- **Reset counters** sets the OK / NOK counters shown on the dashboard and the
+  camera view for the current job back to zero, after a confirmation (needs
+  the *control_connections* permission). The card then says "Since reset" with
+  the time. Nothing is sent to the camera, and the job totals in the Data log,
+  the chart, the readings history and the scrap statistics stay as they were.
+  Scrap and fail-count alerts follow the reset counters.
 
 ## Data log
 
@@ -128,7 +135,7 @@ assign permissions. The last administrator can't be deleted.
 |---|---|
 | `view_dashboard` | View dashboards and camera data, export camera settings |
 | `manage_devices` | Create, edit, delete and import cameras |
-| `control_connections` | Start/stop camera connections, polling and production |
+| `control_connections` | Start/stop camera connections, polling and production, reset the dashboard counters |
 | `view_data` | Browse logged readings and counters, scrap statistics |
 | `exclude_readings` | Exclude readings from the scrap statistics |
 | `manage_notifications` | Configure notification rules and providers |

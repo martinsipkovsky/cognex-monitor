@@ -29,11 +29,14 @@ The `profinet` driver reads counters through a PROFINET-to-Modbus/TCP gateway
 or a PLC that exposes the data over Modbus/TCP. See
 [Protocols](protocols.md#profinet-profinet-gateway-mode-only).
 
-## WhatsApp groups need your own gateway
+## WhatsApp linked phone is unofficial
 
-Meta's official API can't post to WhatsApp groups. Group alerts need a
-WhatsApp gateway service that you set up and run (or a paid third-party one
-such as Green API). See [Notifications](notifications.md).
+Meta's official API can't post to WhatsApp groups. The `linked` WhatsApp
+transport sends from your own number by logging in as a linked device, which
+WhatsApp does not allow: it can restrict or ban numbers that use unofficial
+clients, and a WhatsApp change can break it until the library is updated.
+Use a spare number, and consider Telegram for alerts that must arrive. See
+[Notifications](notifications.md).
 
 ## Counts lost across a camera reset
 

@@ -1,7 +1,9 @@
 """Automatic backups uploaded to an FTP / FTPS server.
 
 The settings live in DATA_DIR/backup_ftp.json (like the database setting, so
-they survive restores and database switches). A daemon thread checks every
+they survive restores and database switches), with a copy in the environment
+database (app.settings_store) that puts the file back if an image update lost
+it. A daemon thread checks every
 30 seconds whether a run is due: daily at a set time in the admin's time
 zone, or every N hours. Each run writes a backup file, uploads it to the
 remote folder and deletes the oldest backups there beyond ``keep``.
@@ -20,7 +22,7 @@ import ssl
 import threading
 from pathlib import Path
 
-from . import backup
+from . import backup, settings_store
 from .scrap_stats import zone
 
 log = logging.getLogger("cognex.backup")
@@ -41,6 +43,9 @@ def _path() -> Path:
     return backup.data_dir() / "backup_ftp.json"
 
 
+KEY = "backup_ftp"
+
+
 def load() -> dict:
     try:
         data = json.loads(_path().read_text(encoding="utf-8"))
@@ -49,14 +54,37 @@ def load() -> dict:
     return {**DEFAULTS, **{k: v for k, v in (data if isinstance(data, dict) else {}).items() if k in FIELDS}}
 
 
-def save(cfg: dict) -> dict:
-    data = {**DEFAULTS, **{k: cfg.get(k, DEFAULTS[k]) for k in FIELDS}}
+def _write(data: dict) -> None:
     path = _path()
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
     os.replace(tmp, path)
+
+
+def save(cfg: dict) -> dict:
+    data = {**DEFAULTS, **{k: cfg.get(k, DEFAULTS[k]) for k in FIELDS}}
+    _write(data)
+    settings_store.save(KEY, data)
     return data
+
+
+def restore_missing() -> bool:
+    """Put the file back from the database copy if it is gone (see module doc).
+
+    When the file is there, make sure the copy matches it.
+    """
+    if _path().exists():
+        data = load()
+        if settings_store.load(KEY) != data:
+            settings_store.save(KEY, data)
+        return False
+    data = settings_store.load(KEY)
+    if not isinstance(data, dict):
+        return False
+    _write({**DEFAULTS, **{k: v for k, v in data.items() if k in FIELDS}})
+    log.warning("FTP backup settings were missing from DATA_DIR; restored them from the database copy")
+    return True
 
 
 # --------------------------------------------------------------------------- #
@@ -191,6 +219,13 @@ def run(cfg: dict | None = None, trigger: str = "schedule") -> dict:
         if tmpdir:
             shutil.rmtree(tmpdir, ignore_errors=True)
     backup.update_state(ftp_last_run=result)
+    from . import notifications  # local import: notifications imports the models
+
+    how = "scheduled" if trigger == "schedule" else "manual"
+    if result["ok"]:
+        notifications.emit_system("backup_ok", f"FTP backup ({how}) finished: {result['message']}")
+    else:
+        notifications.emit_system("backup_failed", f"FTP backup ({how}) failed: {result['message']}")
     return result
 
 
@@ -240,6 +275,7 @@ class Scheduler:
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
             return
+        restore_missing()
         self._stop.clear()
         self._thread = threading.Thread(target=self._run, name="cognex-backup", daemon=True)
         self._thread.start()

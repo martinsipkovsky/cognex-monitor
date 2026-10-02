@@ -36,7 +36,8 @@ async function load() {
       body.push(kp);
       const m = el('div', { class: 'meter' }); m.append(el('span', { style: 'width:' + Math.min(100, job.scrap_rate * 100) + '%;background:var(--' + (scrapClass(job.scrap_rate) === 'pass' ? 'ok' : scrapClass(job.scrap_rate) === 'warn' ? 'warn' : 'bad') + ')' }));
       body.push(m);
-      body.push(el('div', { class: 'muted', style: 'margin-top:8px' }, 'Total parts: ' + total));
+      body.push(el('div', { class: 'muted', style: 'margin-top:8px' }, 'Total parts: ' + total +
+        (job.reset_at ? ' · since reset ' + fmtDateTime(job.reset_at) : '')));
     } else {
       body.push(el('div', { class: 'muted', style: 'margin-top:12px' }, d.last_error ? ('Error: ' + d.last_error) : 'Waiting for first reading…'));
     }

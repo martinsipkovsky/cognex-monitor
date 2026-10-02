@@ -1,8 +1,8 @@
 """FastAPI application entrypoint.
 
 Creates the schema on startup, seeds the default admin, starts the background
-poller, the TCP listener for cameras that push data and the FTP backup
-schedule, and wires up the API
+poller, the TCP listener for cameras that push data, the FTP backup
+schedule and the linked WhatsApp client, and wires up the API
 routers, HTML pages and static assets.
 """
 from __future__ import annotations
@@ -14,10 +14,13 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 
+from . import __version__, settings_store
+from .notifications import startup_notice
 from .config import settings
 from .database import Base, SessionLocal, engine, migrate_schema
 from .dependencies import RedirectToLogin
 from .backup_ftp import scheduler as backup_scheduler
+from .notifiers.whatsapp_linked import link as whatsapp_link
 from .poller import listener, poller
 from .routers import account, auth_routes, backup_admin, data, database_admin, devices, notifications, pages, users
 from .seed import seed_admin
@@ -37,8 +40,15 @@ async def lifespan(app: FastAPI):
     if settings.poll_enabled:
         poller.start()
         listener.start()
+        previous = settings_store.load("app_version")
+        if previous != __version__:
+            settings_store.save("app_version", __version__)
+        startup_notice(__version__, previous)
     backup_scheduler.start()
+    if settings.whatsapp_enabled:
+        whatsapp_link.start()  # reconnects a linked phone; exits at once if none
     yield
+    whatsapp_link.stop()
     backup_scheduler.stop()
     listener.stop()
     poller.stop()
@@ -57,7 +67,7 @@ async def _redirect_to_login(request: Request, exc: RedirectToLogin):
 
 @app.get("/healthz")
 def healthz():
-    return {"status": "ok"}
+    return {"status": "ok", "version": __version__}
 
 
 # JSON API

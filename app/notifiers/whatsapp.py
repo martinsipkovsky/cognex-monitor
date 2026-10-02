@@ -8,7 +8,15 @@ that sends a message to an arbitrary WhatsApp group. So to notify a group we
 must use one of a few practical routes, and this notifier supports the common
 ones through a single ``transport`` setting:
 
-* ``transport = "webhook"`` (default, recommended):
+* ``transport = "linked"`` (no extra service needed, UNOFFICIAL):
+    The app itself is logged in as a linked device of your phone (scan the QR
+    code on the Notifications page) and sends from your number. See
+    whatsapp_linked.py for how it works and the risk of using it.
+    Config: {"transport": "linked", "to": "120363012345678901@g.us"}
+    ``to`` is a group id (pick it from the group list on the Notifications
+    page) or a phone number with country code; a list sends to several.
+
+* ``transport = "webhook"`` (default):
     POST the message as JSON to any HTTP endpoint you control. This is the
     pluggable path: point it at a self-hosted WhatsApp gateway
     (e.g. whatsapp-web.js / Baileys / WAHA / Green API style services) that
@@ -38,6 +46,7 @@ from __future__ import annotations
 import httpx
 
 from .base import Notifier, NotifierError
+from .whatsapp_linked import link
 
 _TIMEOUT = 10.0
 
@@ -46,7 +55,8 @@ class WhatsAppNotifier(Notifier):
     key = "whatsapp"
     label = "WhatsApp group"
     config_fields = {
-        "transport": "'webhook' | 'greenapi' | 'cloud_api'",
+        "transport": "'linked' | 'webhook' | 'greenapi' | 'cloud_api'",
+        "to": "linked: group id (…@g.us, see the group list above) or phone number with country code; a list for several",
         "url": "webhook: endpoint URL to POST the message to",
         "headers": "webhook: optional dict of HTTP headers (e.g. auth)",
         "payload_key": "webhook: JSON key to place the message under (default 'message')",
@@ -60,9 +70,13 @@ class WhatsAppNotifier(Notifier):
         "to": "cloud_api: recipient phone number in E.164",
     }
 
+    config_example = {"transport": "linked", "to": "120363012345678901@g.us"}
+
     def send(self, message: str) -> None:
         transport = self.config.get("transport", "webhook")
-        if transport == "webhook":
+        if transport == "linked":
+            self._send_linked(message)
+        elif transport == "webhook":
             self._send_webhook(message)
         elif transport == "greenapi":
             self._send_greenapi(message)
@@ -70,6 +84,14 @@ class WhatsAppNotifier(Notifier):
             self._send_cloud_api(message)
         else:
             raise NotifierError(f"Unknown WhatsApp transport: {transport}")
+
+    def _send_linked(self, message: str) -> None:
+        to = self.config.get("to")
+        targets = to if isinstance(to, (list, tuple)) else [to]
+        if not any(str(t or "").strip() for t in targets):
+            raise NotifierError("linked transport requires 'to' (a group id or phone number)")
+        for target in targets:
+            link.send(str(target), message)
 
     def _send_webhook(self, message: str) -> None:
         url = self.config.get("url")

@@ -12,6 +12,8 @@ class Notifier(ABC):
     key: str = ""
     label: str = ""
     config_fields: dict[str, str] = {}
+    # pre-filled in the Add provider dialog
+    config_example: dict = {}
 
     def __init__(self, config: dict | None = None):
         self.config = config or {}

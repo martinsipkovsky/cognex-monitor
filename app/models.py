@@ -11,6 +11,9 @@ Design notes on the counter logic (the heart of this app):
   restarted from zero), not raw_now - raw_prev (which would be negative).
 * When the job name changes, the running totals for the previous job are
   frozen (kept in the DB) and a fresh CounterState starts for the new job.
+* A user can reset the counters shown on the dashboard. That only moves a
+  baseline (base_*): the totals keep counting, so the readings history and
+  the scrap statistics, which are built from the totals, do not change.
 """
 from __future__ import annotations
 
@@ -44,7 +47,7 @@ def utcnow() -> dt.datetime:
 PERMISSIONS = {
     "view_dashboard": "View dashboards and camera data",
     "manage_devices": "Create, edit and delete camera devices",
-    "control_connections": "Start/stop camera connections and polling",
+    "control_connections": "Start/stop camera connections, polling and production; reset counters",
     "view_data": "Browse logged readings and counters",
     "exclude_readings": "Exclude readings from the scrap statistics",
     "manage_notifications": "Configure notification rules and providers",
@@ -108,6 +111,8 @@ class Device(Base):
     last_pass_change_at: Mapped[Optional[dt.datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # production state last reported by a "production_change" notification
+    notified_state: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
 
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
@@ -145,6 +150,12 @@ class CounterState(Base):
     last_raw_fail: Mapped[int] = mapped_column(Integer, default=0)
     last_raw_count: Mapped[int] = mapped_column(Integer, default=0)
 
+    # totals at the last reset from the dashboard; shown = total - base
+    base_pass: Mapped[int] = mapped_column(Integer, default=0)
+    base_fail: Mapped[int] = mapped_column(Integer, default=0)
+    base_count: Mapped[int] = mapped_column(Integer, default=0)
+    reset_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     started_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[dt.datetime] = mapped_column(
@@ -158,6 +169,30 @@ class CounterState(Base):
         if self.total_count <= 0:
             return 0.0
         return self.total_fail / self.total_count
+
+    # Counters as shown on the dashboard: since the last reset (if any).
+    @property
+    def shown_pass(self) -> int:
+        return max(self.total_pass - (self.base_pass or 0), 0)
+
+    @property
+    def shown_fail(self) -> int:
+        return max(self.total_fail - (self.base_fail or 0), 0)
+
+    @property
+    def shown_count(self) -> int:
+        return max(self.total_count - (self.base_count or 0), 0)
+
+    @property
+    def shown_scrap_rate(self) -> float:
+        return self.shown_fail / self.shown_count if self.shown_count > 0 else 0.0
+
+    def reset_shown(self, now: dt.datetime | None = None) -> None:
+        """Start the dashboard counters from zero; the totals keep counting."""
+        self.base_pass = self.total_pass
+        self.base_fail = self.total_fail
+        self.base_count = self.total_count
+        self.reset_at = now or utcnow()
 
 
 class Reading(Base):
@@ -208,10 +243,16 @@ class NotificationRule(Base):
         ForeignKey("devices.id"), nullable=True
     )  # null = applies to all devices
 
-    # "scrap_rate" | "fail_count" | "disconnected"
+    # a key of app.notifications.CONDITIONS, e.g. "scrap_rate", "disconnected"
     condition: Mapped[str] = mapped_column(String(40))
-    # e.g. 0.05 for 5% scrap, or a fail-count threshold, or minutes offline
+    # e.g. 0.05 for 5% scrap, or a fail-count threshold
     threshold: Mapped[float] = mapped_column(default=0.0)
+    # rules for all cameras: {"<device id>": threshold} overrides per camera
+    thresholds: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    # "info" | "warning" | "alert": shown in front of the message
+    severity: Mapped[str] = mapped_column(String(16), default="alert")
+    # providers that receive this rule's messages; empty / null = all of them
+    provider_ids: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
 
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     # minimum seconds between two alerts for the same rule
