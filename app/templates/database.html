@@ -17,6 +17,65 @@
 </div>
 
 <div class="section">
+  <h2>Backups</h2>
+  <p class="muted" style="margin-top:0">Take a backup regularly and keep it somewhere other than this server, for example with the automatic FTP backup below. A backup holds all app data: cameras, readings, counters, users and notification settings.</p>
+  <div id="lastBackup"></div>
+  <div id="bmsg"></div>
+  <div class="actions">
+    <a class="btn" href="/api/database/backup/download" onclick="downloadStarted()">Download backup</a>
+    <button class="btn secondary" onclick="document.getElementById('importFile').click()">Import backup…</button>
+    <input type="file" id="importFile" accept=".gz,application/gzip" style="display:none" onchange="inspectImport(this)" />
+  </div>
+  <div id="importBox" class="card" style="display:none;margin-top:14px">
+    <h3>Import this backup?</h3>
+    <div id="importInfo" class="muted"></div>
+    <div class="warnbox" style="margin-top:10px">Importing <strong>replaces all current data</strong> (cameras, readings, counters, users, notification settings) with the data in the file. The current data is saved first as a backup on this server, listed below, so the import can be undone by importing that file. You will be signed out and sign in with an account from the backup.</div>
+    <label style="display:flex;align-items:center;gap:8px;margin-top:12px"><input type="checkbox" id="importConfirm" style="width:auto" onchange="document.getElementById('importBtn').disabled = !this.checked"/> I understand that all current data will be replaced.</label>
+    <div class="actions" style="margin-top:12px">
+      <button class="btn danger" id="importBtn" disabled onclick="runImport()">Replace all data with this backup</button>
+      <button class="btn secondary" onclick="cancelImport()">Cancel</button>
+    </div>
+  </div>
+  <div id="safetyWrap" style="display:none;margin-top:14px">
+    <div class="muted" style="margin-bottom:4px">Saved automatically before an import (the last 5 are kept on this server):</div>
+    <div id="safetyList"></div>
+  </div>
+</div>
+
+<div class="section">
+  <h2>Automatic backup to FTP</h2>
+  <div id="ftpLast"></div>
+  <div id="fmsg"></div>
+  <label style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="f_enabled" style="width:auto"/> Back up automatically</label>
+  <div class="row" style="margin-top:10px">
+    <div><label>FTP server (host / IP)</label><input id="f_host" placeholder="192.168.1.30" /></div>
+    <div style="flex:.4"><label>Port</label><input id="f_port" type="number" value="21" /></div>
+  </div>
+  <div class="row">
+    <div><label>User</label><input id="f_user" autocomplete="off" /></div>
+    <div><label>Password</label><input id="f_pw" type="password" autocomplete="new-password" /></div>
+    <div><label>Remote folder</label><input id="f_folder" value="/cognex-backups" /></div>
+  </div>
+  <label style="display:flex;align-items:center;gap:8px;margin-top:8px"><input type="checkbox" id="f_tls" style="width:auto"/> Use FTPS (explicit TLS). The server's certificate is not checked, so self-signed certificates work.</label>
+  <div class="row" style="margin-top:10px">
+    <div><label>Schedule</label>
+      <select id="f_schedule" onchange="scheduleFields()">
+        <option value="daily">Daily at a set time</option>
+        <option value="interval">Every N hours</option>
+      </select></div>
+    <div id="f_dailyWrap"><label>Time (<span id="f_tzname"></span>)</label><input id="f_time" type="time" value="02:00" /></div>
+    <div id="f_intervalWrap" style="display:none"><label>Every … hours</label><input id="f_hours" type="number" min="1" value="24" /></div>
+    <div><label>Backups to keep on the server</label><input id="f_keep" type="number" min="1" value="14" /></div>
+  </div>
+  <div class="actions" style="margin-top:16px">
+    <button class="btn secondary" onclick="testFtp()">Test connection</button>
+    <button class="btn" onclick="saveFtp()">Save</button>
+    <button class="btn secondary" onclick="runFtp()">Run now</button>
+  </div>
+  <div class="hint" style="margin-top:8px">Each run uploads one file named <code>cognex-backup-DATE-TIME.json.gz</code> and deletes the oldest of those files in the folder beyond the number to keep. Other files in the folder are not touched. Restore one with Import backup above.</div>
+</div>
+
+<div class="section">
   <h2>Use a different database</h2>
   <div id="msg"></div>
   <div class="row">
@@ -207,6 +266,156 @@ async function restartApp() {
   showMsg('The app did not come back within 2 minutes. Check the container with: docker compose ps / docker compose logs web', 'err');
 }
 
+// ---- Backups ----
+const BACKUP_MAX_AGE_DAYS = 7;
+const TZ = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+let IMPORT_TOKEN = null;
+
+function box(id, text, kind) {
+  const m = document.getElementById(id);
+  m.innerHTML = '';
+  if (text) m.append(el('div', { class: kind === 'ok' ? 'okbox' : kind === 'warn' ? 'warnbox' : 'error', style: 'margin-bottom:12px' }, text));
+}
+function fmtTime(iso) { return iso ? new Date(iso).toLocaleString() : '—'; }
+function fmtSize(n) {
+  if (n == null) return '';
+  return n < 1024 * 1024 ? Math.max(1, Math.round(n / 1024)) + ' KB' : (n / 1024 / 1024).toFixed(1) + ' MB';
+}
+function sumRows(t) { return Object.values(t || {}).reduce((a, b) => a + b, 0); }
+const KIND = { download: 'downloaded', ftp: 'uploaded to FTP' };
+
+async function loadBackups() {
+  const s = await getJSON('/api/database/backup');
+  const lb = s.last_backup;
+  const ageDays = lb ? (Date.now() - new Date(lb.at).getTime()) / 86400000 : null;
+  if (!lb) box('lastBackup', 'No backup has been made yet. Download one now or set up the automatic FTP backup.', 'warn');
+  else if (ageDays > BACKUP_MAX_AGE_DAYS) box('lastBackup', `The last backup is ${Math.floor(ageDays)} days old (${fmtTime(lb.at)}, ${KIND[lb.kind] || lb.kind}). Take a new one.`, 'warn');
+  else box('lastBackup', `Last backup: ${fmtTime(lb.at)} (${fmtAgo(lb.at)}), ${KIND[lb.kind] || lb.kind}, ${fmtSize(lb.size)}.`, 'ok');
+
+  const list = document.getElementById('safetyList'); list.innerHTML = '';
+  for (const b of s.safety_backups) {
+    list.append(el('div', { style: 'display:flex;gap:10px;align-items:center;margin:3px 0' },
+      el('a', { href: '/api/database/backup/saved/' + encodeURIComponent(b.name) }, b.name),
+      el('span', { class: 'muted' }, fmtTime(b.at) + ' · ' + fmtSize(b.size))));
+  }
+  document.getElementById('safetyWrap').style.display = s.safety_backups.length ? '' : 'none';
+
+  const f = s.ftp;
+  document.getElementById('f_enabled').checked = f.enabled;
+  document.getElementById('f_host').value = f.host || '';
+  document.getElementById('f_port').value = f.port || 21;
+  document.getElementById('f_user').value = f.user || '';
+  document.getElementById('f_pw').value = '';
+  document.getElementById('f_pw').placeholder = f.has_password ? '(saved, leave blank to keep)' : '';
+  if (f.host) document.getElementById('f_folder').value = f.folder || '/';
+  document.getElementById('f_tls').checked = f.tls;
+  document.getElementById('f_schedule').value = f.schedule;
+  document.getElementById('f_time').value = f.daily_time;
+  document.getElementById('f_hours').value = f.interval_hours;
+  document.getElementById('f_keep').value = f.keep;
+  // the time is saved in this browser's time zone
+  document.getElementById('f_tzname').textContent = TZ + (f.host && f.timezone !== TZ ? ', saved as ' + f.timezone : '');
+  scheduleFields();
+  renderFtpLast(s.ftp_last_run, s.ftp_next_run, f);
+}
+
+function renderFtpLast(r, next, f) {
+  const nextText = next ? ' Next automatic backup: ' + fmtTime(next) + '.' : (f.enabled ? '' : ' Automatic backup is off.');
+  if (!r) { box('ftpLast', 'No FTP backup has run yet.' + nextText, 'warn'); return; }
+  const when = `Last run ${fmtTime(r.at)} (${r.trigger === 'manual' ? 'Run now' : 'scheduled'}): `;
+  box('ftpLast', when + (r.ok ? r.message + (r.size ? ', ' + fmtSize(r.size) : '') + '.' : 'FAILED. ' + r.message) + nextText, r.ok ? 'ok' : 'err');
+}
+
+function scheduleFields() {
+  const daily = document.getElementById('f_schedule').value === 'daily';
+  document.getElementById('f_dailyWrap').style.display = daily ? '' : 'none';
+  document.getElementById('f_intervalWrap').style.display = daily ? 'none' : '';
+}
+
+function ftpForm() {
+  return {
+    enabled: document.getElementById('f_enabled').checked,
+    host: v('f_host'), port: parseInt(v('f_port'), 10) || 21,
+    user: v('f_user'), password: document.getElementById('f_pw').value || null,
+    folder: v('f_folder') || '/', tls: document.getElementById('f_tls').checked,
+    schedule: v('f_schedule'), daily_time: v('f_time') || '02:00',
+    interval_hours: parseInt(v('f_hours'), 10) || 24, keep: parseInt(v('f_keep'), 10) || 14,
+    timezone: TZ,
+  };
+}
+
+async function testFtp() {
+  box('fmsg', 'Connecting…', 'warn');
+  try { const r = await postJSON('/api/database/backup/ftp/test', ftpForm()); box('fmsg', r.ok ? r.message : 'Test failed: ' + r.message, r.ok ? 'ok' : 'err'); }
+  catch (e) { box('fmsg', e.message, 'err'); }
+}
+
+async function saveFtp() {
+  try { await api('PUT', '/api/database/backup/ftp', ftpForm()); box('fmsg', 'FTP backup settings saved.', 'ok'); loadBackups(); }
+  catch (e) { box('fmsg', e.message, 'err'); }
+}
+
+async function runFtp() {
+  box('fmsg', 'Making a backup and uploading it, this can take a while…', 'warn');
+  try {
+    await postJSON('/api/database/backup/ftp/run');
+    box('fmsg', '');  // the result shows in the last-run box
+  } catch (e) { box('fmsg', e.message, 'err'); }
+  loadBackups();
+}
+
+function downloadStarted() {
+  box('bmsg', 'Making the backup, the download starts in a moment…', 'warn');
+  setTimeout(() => { box('bmsg', ''); loadBackups(); }, 4000);
+}
+
+async function inspectImport(input) {
+  const file = input.files[0];
+  input.value = '';
+  if (!file) return;
+  cancelImport();
+  box('bmsg', 'Uploading and checking ' + file.name + '…', 'warn');
+  const fd = new FormData(); fd.append('file', file);
+  try {
+    const resp = await fetch('/api/database/backup/inspect', { method: 'POST', body: fd });
+    const r = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(r.detail || resp.statusText);
+    IMPORT_TOKEN = r.token;
+    const info = document.getElementById('importInfo'); info.innerHTML = '';
+    info.append(el('div', {}, `${r.file} (${fmtSize(r.size)}), made ${fmtTime(r.created_at)}, ${sumRows(r.tables)} rows.`));
+    info.append(el('div', {}, Object.entries(r.tables).map(([k, n]) => k.replace(/_/g, ' ') + ': ' + n).join(' · ')));
+    if (r.unknown_tables.length) info.append(el('div', {}, 'Not used by this version, skipped: ' + r.unknown_tables.join(', ')));
+    document.getElementById('importConfirm').checked = false;
+    document.getElementById('importBtn').disabled = true;
+    document.getElementById('importBox').style.display = '';
+    box('bmsg', '');
+  } catch (e) { box('bmsg', 'Cannot import this file: ' + e.message, 'err'); }
+}
+
+function cancelImport() {
+  if (IMPORT_TOKEN) delJSON('/api/database/backup/upload/' + IMPORT_TOKEN).catch(() => {});
+  IMPORT_TOKEN = null;
+  document.getElementById('importBox').style.display = 'none';
+}
+
+async function runImport() {
+  if (!IMPORT_TOKEN || !document.getElementById('importConfirm').checked) return;
+  if (!confirm('Replace ALL current data with this backup? The current data is saved on the server first.')) return;
+  document.getElementById('importBtn').disabled = true;
+  box('bmsg', 'Saving the current data and importing, this can take a while. Cameras are not read meanwhile…', 'warn');
+  try {
+    const r = await postJSON('/api/database/backup/import', { token: IMPORT_TOKEN, confirm: true });
+    IMPORT_TOKEN = null;
+    document.getElementById('importBox').style.display = 'none';
+    box('bmsg', `Imported ${sumRows(r.imported)} rows. The previous data was saved as ${r.safety_backup}. Sign in again with an account from the backup.`, 'ok');
+    setTimeout(() => { location.href = '/login'; }, 6000);
+  } catch (e) {
+    document.getElementById('importBtn').disabled = false;
+    box('bmsg', e.message, 'err');
+  }
+}
+
 loadStatus().catch(e => showMsg(e.message, 'err'));
+loadBackups().catch(e => box('bmsg', e.message, 'err'));
 </script>
 {% endblock %}

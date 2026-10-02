@@ -113,3 +113,12 @@ The navigation only shows the tabs a user may open. The Database tab is for
 administrators only.
 
 Each user can change their own password under *Account*.
+
+## Database tab and backups
+
+Administrators see a *Database* tab. Besides choosing the database server, it
+is where backups are made: **Download backup** saves all data in one file,
+**Import backup** puts a backup file back (replacing the current data), and
+the automatic backup sends a backup to an FTP server on a schedule. Take
+backups regularly; the tab warns when the last one is more than 7 days old.
+See [Configuration](configuration.md#backups-database-tab) for details.

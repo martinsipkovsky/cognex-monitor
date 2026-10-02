@@ -35,6 +35,9 @@ permissions, and PostgreSQL storage, shipped as a Docker image.
 - **Users and permissions:** login required, with granular permissions per user.
 - **Camera export/import** as JSON, and an admin **Database tab** to move the
   app to another PostgreSQL server.
+- **Backups:** download all data as one file, import it again, and automatic
+  scheduled backups to an FTP/FTPS server, with a reminder when the last
+  backup is more than a week old.
 
 ## Quick start (build from source)
 

@@ -96,9 +96,13 @@ Two Docker volumes hold everything that must survive an update:
 | Volume | Contents |
 |---|---|
 | `db_data` | The bundled PostgreSQL database: users, cameras, counters, readings, alerts |
-| `app_data` | `/srv/data` in the app container: the database choice saved on the Database tab |
+| `app_data` | `/srv/data` in the app container: the database choice and FTP backup settings saved on the Database tab, and backups taken before an import |
 
-Back up the database with:
+The easiest backup is on the Database tab: **Download backup**, or the
+automatic backup to an FTP server (see [Configuration](configuration.md#backups-database-tab)).
+A backup file from there is restored with **Import backup** on the same tab.
+
+You can also back up the bundled PostgreSQL database directly:
 
 ```bash
 docker compose exec db pg_dump -U cognex cognex > cognex-backup.sql

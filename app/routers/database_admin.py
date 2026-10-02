@@ -11,10 +11,10 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select, text
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from .. import database, dbconfig
+from .. import backup, database, dbconfig
 from ..database import Base, get_db, make_engine
 from ..dependencies import require_api_user
 from ..models import User
@@ -100,14 +100,7 @@ def copy_all_data(target_url: str) -> dict:
                     dst.execute(table.insert(), [dict(r._mapping) for r in batch])
                     n += len(batch)
                 copied[table.name] = n
-            if dst.dialect.name == "postgresql":
-                # keep new rows from colliding with the copied ids
-                for table in Base.metadata.sorted_tables:
-                    if "id" in table.c:
-                        dst.execute(text(
-                            f"SELECT setval(pg_get_serial_sequence('{table.name}', 'id'), "
-                            f"COALESCE((SELECT MAX(id) FROM {table.name}), 0) + 1, false)"
-                        ))
+            backup.reset_sequences(dst)
         return copied
     finally:
         target.dispose()

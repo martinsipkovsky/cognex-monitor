@@ -1,7 +1,8 @@
 """FastAPI application entrypoint.
 
 Creates the schema on startup, seeds the default admin, starts the background
-poller and the TCP listener for cameras that push data, and wires up the API
+poller, the TCP listener for cameras that push data and the FTP backup
+schedule, and wires up the API
 routers, HTML pages and static assets.
 """
 from __future__ import annotations
@@ -16,8 +17,9 @@ from pathlib import Path
 from .config import settings
 from .database import Base, SessionLocal, engine, migrate_schema
 from .dependencies import RedirectToLogin
+from .backup_ftp import scheduler as backup_scheduler
 from .poller import listener, poller
-from .routers import account, auth_routes, data, database_admin, devices, notifications, pages, users
+from .routers import account, auth_routes, backup_admin, data, database_admin, devices, notifications, pages, users
 from .seed import seed_admin
 from .templating import templates
 
@@ -35,7 +37,9 @@ async def lifespan(app: FastAPI):
     if settings.poll_enabled:
         poller.start()
         listener.start()
+    backup_scheduler.start()
     yield
+    backup_scheduler.stop()
     listener.stop()
     poller.stop()
 
@@ -64,5 +68,6 @@ app.include_router(devices.router)
 app.include_router(data.router)
 app.include_router(notifications.router)
 app.include_router(database_admin.router)
+app.include_router(backup_admin.router)
 # HTML pages (registered last so /api/* wins)
 app.include_router(pages.router)

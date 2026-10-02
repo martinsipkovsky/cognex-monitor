@@ -31,6 +31,10 @@ docker run --rm -v "$(pwd)/tests:/srv/tests" -e POLL_ENABLED=false \
 On Windows Git Bash, prefix the `docker run` with `MSYS_NO_PATHCONV=1` and use
 `$(pwd -W)` instead of `$(pwd)`.
 
+The FTP backup tests run against a real FTP server from `pyftpdlib`, which is
+not an app dependency; they are skipped unless it is installed
+(`pip install pyftpdlib`, inside the container before `pytest`).
+
 The tests cover the counter logic, production state, the SLMP frames, the TCP
 and UDP listeners, and the API end to end. They use simulated devices only.
 
@@ -42,6 +46,8 @@ app/
   config.py          settings from environment variables
   database.py        engine, session, schema creation and column migration
   dbconfig.py        database choice saved by the Database tab
+  backup.py          backup file format, writing and restoring all data
+  backup_ftp.py      FTP/FTPS upload and the automatic backup schedule
   models.py          User, Device, CounterState, Reading, Notification*
   counters.py        reset-proof accumulation (pure, unit-tested)
   production.py      running / idle / stopped state per camera
@@ -54,7 +60,7 @@ app/
   protocols/         one file per camera protocol
   notifiers/         one file per notification transport
   routers/           auth, account, users, devices, data, notifications,
-                     database_admin, pages
+                     database_admin, backup_admin, pages
   templates/         dark-mode Jinja2 pages
   static/            style.css, app.js
 deploy/              compose file and .env template for a prebuilt image
