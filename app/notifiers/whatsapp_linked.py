@@ -22,6 +22,14 @@ commands over a multiprocessing pipe:
     child -> parent   {"id": 1, "ok": true, "result": ...} or {"id": 1, "ok": false, "error": "..."}
                       {"event": "qr", "code": "..."}  /  {"event": "connected", "phone": ..., "name": ...}
                       {"event": "logged_out", "reason": "..."}  /  {"event": "not_linked"}  / ...
+                      {"event": "message", "chat": "…@g.us", "chat_name": ..., "sender": ...,
+                       "sender_name": ..., "from_me": ..., "text": "!status"}
+
+Incoming messages: only group text messages that start with a punctuation
+character (a possible command prefix such as "!") and are less than two
+minutes old are passed to the parent, which hands them to ``on_message``
+(app.commands). Messages the app sent itself are never passed on, so a reply
+can not trigger another command.
 
 The login (the session keys) is stored by whatsmeow in the environment
 database (its own whatsmeow_* tables in the Postgres container, which is
@@ -35,6 +43,7 @@ from __future__ import annotations
 
 import logging
 import multiprocessing as mp
+import queue
 import threading
 import time
 from pathlib import Path
@@ -50,6 +59,7 @@ CLIENT_ID = "cognex-monitor"
 DEVICE_NAME = "Cognex Monitor"  # shown in the phone's list of linked devices
 PAIR_TIMEOUT = 170  # seconds WhatsApp keeps offering QR codes for one login
 REQUEST_TIMEOUT = 30
+MESSAGE_MAX_AGE = 120  # seconds; older messages (delivered after a reconnect) are ignored
 RESTART_DELAY = 20  # seconds before a linked client that stopped is started again,
 RESTART_DELAY_MAX = 600  # doubling after each failure up to this
 
@@ -104,12 +114,13 @@ def _child(conn, store: str, pair: bool) -> None:  # pragma: no cover - needs Wh
             ConnectedEv,
             ConnectFailureEv,
             LoggedOutEv,
+            MessageEv,
             PairStatusEv,
             StreamReplacedEv,
             TemporaryBanEv,
         )
         from neonize.proto.waCompanionReg.WAWebProtobufsCompanionReg_pb2 import DeviceProps
-        from neonize.utils.jid import Jid2String
+        from neonize.utils.jid import Jid2String, JIDToNonAD
     except Exception as exc:  # noqa: BLE001
         emit({"event": "error", "error": f"WhatsApp library is not available: {exc}"})
         return
@@ -164,6 +175,40 @@ def _child(conn, store: str, pair: bool) -> None:  # pragma: no cover - needs Wh
     def _failed(_c, ev):
         emit({"event": "error", "error": f"connection refused by WhatsApp: {ev.Message or ev.Reason}"})
 
+    sent_ids: list[str] = []  # ids of messages the app sent (never commands)
+    group_names: dict[str, str] = {}
+
+    def group_name(jid) -> str | None:
+        key = Jid2String(jid)
+        if key not in group_names:
+            try:
+                group_names[key] = client.get_group_info(jid).GroupName.Name or key
+            except Exception:  # noqa: BLE001
+                return None
+        return group_names[key]
+
+    @client.event(MessageEv)
+    def _message(_c, ev):
+        try:
+            src = ev.Info.MessageSource
+            if not src.IsGroup or ev.Info.ID in sent_ids:
+                return
+            m = ev.Message
+            text = (m.conversation or m.extendedTextMessage.text or "").strip()
+            if not text or text[0].isalnum() or len(text) > 500:
+                return
+            ts = ev.Info.Timestamp
+            ts = ts / 1000 if ts > 10**11 else ts  # seconds or milliseconds
+            if ts and time.time() - ts > MESSAGE_MAX_AGE:
+                return
+            chat = JIDToNonAD(src.Chat)
+            info = {"event": "message", "chat": Jid2String(chat), "sender": src.Sender.User or None,
+                    "sender_name": ev.Info.Pushname or None, "from_me": bool(src.IsFromMe), "text": text}
+            # looking up the group name is a request to WhatsApp: not on the event thread
+            threading.Thread(target=lambda: emit({**info, "chat_name": group_name(chat)}), daemon=True).start()
+        except Exception as exc:  # noqa: BLE001
+            logging.getLogger("whatsapp").warning("could not read a message: %s", exc)
+
     def run() -> None:
         try:
             client.connect()
@@ -183,7 +228,9 @@ def _child(conn, store: str, pair: bool) -> None:  # pragma: no cover - needs Wh
         try:
             cmd = msg.get("cmd")
             if cmd == "send":
-                client.send_message(_jid(msg["to"]), msg["text"])
+                resp = client.send_message(_jid(msg["to"]), msg["text"])
+                sent_ids.append(resp.ID)
+                del sent_ids[:-200]
                 result = True
             elif cmd == "groups":
                 result = sorted(
@@ -226,6 +273,12 @@ class WhatsAppLink:
         self.error: str | None = None
         self.pairing = False
         self.since: float | None = None
+        # called with each incoming group message that may be a command
+        # (set by app.main to app.commands.handle_message); runs on its own
+        # thread, one message at a time
+        self.on_message = None
+        self._inbox: "queue.Queue[dict]" = queue.Queue()
+        self._worker: threading.Thread | None = None
 
     # ---- process management ------------------------------------------------
     def running(self) -> bool:
@@ -324,7 +377,9 @@ class WhatsAppLink:
                     waiter["event"].set()
                 return
             ev = msg.get("event")
-            if ev == "qr":
+            if ev == "message":
+                self._dispatch(msg)
+            elif ev == "qr":
                 self.state, self.qr, self.qr_at = "qr", msg["code"], time.time()
             elif ev == "paired":
                 self.state, self.qr, self.phone = "starting", None, msg.get("phone")
@@ -345,6 +400,22 @@ class WhatsAppLink:
                 log.warning("WhatsApp: %s", self.error)
                 if self.state != "connected":
                     self.state = "error"
+
+    def _dispatch(self, msg: dict) -> None:
+        if self.on_message is None:
+            return
+        self._inbox.put(msg)
+        if self._worker is None or not self._worker.is_alive():
+            self._worker = threading.Thread(target=self._work, name="whatsapp-commands", daemon=True)
+            self._worker.start()
+
+    def _work(self) -> None:
+        while True:
+            msg = self._inbox.get()
+            try:
+                self.on_message(msg)
+            except Exception:  # noqa: BLE001 - one bad command must not stop the others
+                log.exception("handling a WhatsApp message failed")
 
     def _fail_pending(self, reason: str) -> None:
         for waiter in self._pending.values():

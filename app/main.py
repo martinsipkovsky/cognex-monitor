@@ -14,7 +14,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 
-from . import __version__, settings_store
+from . import __version__, commands, settings_store
 from .notifications import startup_notice
 from .config import settings
 from .database import Base, SessionLocal, engine, migrate_schema
@@ -22,7 +22,8 @@ from .dependencies import RedirectToLogin
 from .backup_ftp import scheduler as backup_scheduler
 from .notifiers.whatsapp_linked import link as whatsapp_link
 from .poller import listener, poller
-from .routers import account, auth_routes, backup_admin, data, database_admin, devices, notifications, pages, users
+from .routers import (account, auth_routes, backup_admin, commands as commands_api, data, database_admin,
+                      devices, notifications, pages, users)
 from .seed import seed_admin
 from .templating import templates
 
@@ -35,6 +36,7 @@ async def lifespan(app: FastAPI):
     db = SessionLocal()
     try:
         seed_admin(db)
+        commands.seed_defaults(db)
     finally:
         db.close()
     if settings.poll_enabled:
@@ -45,6 +47,7 @@ async def lifespan(app: FastAPI):
             settings_store.save("app_version", __version__)
         startup_notice(__version__, previous)
     backup_scheduler.start()
+    whatsapp_link.on_message = commands.handle_message  # "!status" in a WhatsApp group
     if settings.whatsapp_enabled:
         whatsapp_link.start()  # reconnects a linked phone; exits at once if none
     yield
@@ -76,6 +79,7 @@ app.include_router(account.router)
 app.include_router(users.router)
 app.include_router(devices.router)
 app.include_router(data.router)
+app.include_router(commands_api.router)  # before notifications: /commands/... is more specific
 app.include_router(notifications.router)
 app.include_router(database_admin.router)
 app.include_router(backup_admin.router)

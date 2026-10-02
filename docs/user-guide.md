@@ -122,7 +122,9 @@ These parts are left out:
 
 ## Notifications tab
 
-Alert rules and delivery providers. See [Notifications](notifications.md).
+Alert rules, delivery providers, the linked WhatsApp phone and the commands
+it answers in WhatsApp groups (e.g. `!status`). See
+[Notifications](notifications.md).
 
 ## Users and permissions
 

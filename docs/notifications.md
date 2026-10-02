@@ -90,6 +90,42 @@ the app reconnects by itself and the box shows the error meanwhile.
 The client runs in a separate process in the app container. Its log lines are
 in `docker compose logs web`, starting with `whatsapp`.
 
+### Commands in WhatsApp groups
+
+With a phone linked, people in a WhatsApp group can ask the app for figures:
+send `!status` in the group and the linked phone answers with every camera's
+production state, OK / NOK and scrap. `!status line 1` answers for the cameras
+whose name contains "line 1" only, and `!help` lists the commands allowed in
+that group.
+
+Commands are set up in the **WhatsApp commands** section of the Notifications
+tab. A `status` command is there from the start.
+
+- **Prefix**: a message only counts as a command when it starts with it (`!`
+  by default; 1-3 characters starting with a symbol, e.g. `/` or `#cm`), so
+  normal chat never triggers anything.
+- **Keyword**: the word after the prefix (lower case letters, digits, `-`,
+  `_`).
+- **Counts**: *dashboard counters* (current job, since the last reset, as on
+  the dashboard), *today* (production time only, the same figures as Scrap
+  statistics) or *the last N hours*.
+- **Header, one line per camera, footer**: the reply text. `{placeholders}`
+  are filled in; the dialog lists them (`{camera}`, `{state}`, `{job}`,
+  `{pass}`, `{fail}`, `{scrap}`, `{total_scrap}`, `{date}`, `{time}`, …).
+  **Preview reply** shows what it would send now, without sending.
+- **Answers in**: tick the groups where the command works. None ticked = every
+  group the phone is in. In other groups the app stays silent, also for
+  `!help` and unknown commands. Private chats are never answered.
+
+Times in a reply use the time zone of the browser that last saved the command.
+A group gets at most one answer every 3 seconds. Every command the app
+receives is listed in the **Command log** with the group, the sender, the
+reply or the reason it was not answered. Messages older than two minutes
+(delivered after the app was offline) are ignored.
+
+Commands also work when you send them from the linked phone itself; the
+app's own replies never trigger a command.
+
 ### `webhook`
 
 POSTs the message as JSON to any HTTP endpoint, for example a self-hosted

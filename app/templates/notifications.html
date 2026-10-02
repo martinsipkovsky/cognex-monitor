@@ -38,6 +38,21 @@
 </div>
 
 <div class="section">
+  <div class="toolbar"><h2 style="border:none">WhatsApp commands</h2><button class="btn small" onclick="newCommand()">+ Add command</button></div>
+  <p class="hint" style="margin:-4px 0 10px">Anyone in an allowed group can send a command, e.g. <code id="c_example">!status</code> or <code>!status Line 1</code> for one camera; the linked phone answers in the group.
+    <code>!help</code> lists the commands. Only messages that start with the prefix count.</p>
+  <div class="row" style="max-width:420px;align-items:end">
+    <div><label>Prefix</label><input id="c_prefix" maxlength="3" /></div>
+    <div><button class="btn secondary small" onclick="savePrefix()">Save prefix</button></div>
+  </div>
+  <table style="margin-top:12px"><thead><tr><th>Command</th><th>Shows</th><th>Groups</th><th>Enabled</th><th></th></tr></thead><tbody id="cmdRows"></tbody></table>
+  <div id="cmdEmpty" class="empty" style="display:none">No commands. Add one, e.g. "status".</div>
+  <h3 style="margin:22px 0 8px;font-size:14px">Command log</h3>
+  <table><thead><tr><th>Time</th><th>Group</th><th>From</th><th>Message</th><th>Result</th><th>Reply / error</th></tr></thead><tbody id="cmdLogRows"></tbody></table>
+  <div id="cmdLogEmpty" class="empty" style="display:none">No commands received yet.</div>
+</div>
+
+<div class="section">
   <h2>Recent alert log</h2>
   <table><thead><tr><th>Time</th><th>Message</th><th>Delivered</th><th>Detail</th></tr></thead><tbody id="logRows"></tbody></table>
   <div id="logEmpty" class="empty" style="display:none">No alerts sent yet.</div>
@@ -58,6 +73,37 @@
   <div class="actions" style="margin-top:18px;justify-content:flex-end">
     <button class="btn secondary" onclick="closeModal('provModal')">Cancel</button>
     <button class="btn" onclick="saveProvider()">Save</button>
+  </div>
+</div></div>
+
+<!-- command modal -->
+<div class="modal-back" id="cmdModal"><div class="modal" style="max-width:640px">
+  <h2 id="cmdTitle">Add command</h2>
+  <div id="cmdError" class="error" style="display:none"></div>
+  <div class="row">
+    <div><label>Keyword</label><input id="c_keyword" placeholder="status" /><div class="hint">Lower case letters, digits, - and _. Sent as <span id="c_kwHint">!status</span>.</div></div>
+    <div><label>Enabled</label><select id="c_enabled"><option value="1">Yes</option><option value="0">No</option></select></div>
+  </div>
+  <label>Description (shown by help)</label><input id="c_description" placeholder="Scrap of every camera" />
+  <div class="row">
+    <div><label>Counts</label><select id="c_period" onchange="onPeriod()"></select></div>
+    <div id="c_hoursBox"><label>Hours</label><input id="c_hours" type="number" min="1" value="8" /></div>
+  </div>
+  <label>Header</label><textarea id="c_header" rows="2" spellcheck="false"></textarea>
+  <label>One line per camera</label><textarea id="c_line" rows="3" spellcheck="false"></textarea>
+  <label>Footer</label><textarea id="c_footer" rows="2" spellcheck="false"></textarea>
+  <div id="c_placeholders" class="hint" style="margin-top:6px"></div>
+  <div class="hint" id="c_tz"></div>
+  <label>Answers in</label>
+  <div id="c_groups" class="hint"></div>
+  <div class="actions" style="margin-top:12px">
+    <input id="c_previewCamera" placeholder="camera (optional)" style="max-width:200px" />
+    <button class="btn secondary small" onclick="previewCommand()">Preview reply</button>
+  </div>
+  <pre id="c_preview" style="display:none;white-space:pre-wrap;background:var(--bg-3);padding:10px;border-radius:8px;margin-top:8px;font-size:13px"></pre>
+  <div class="actions" style="margin-top:18px;justify-content:flex-end">
+    <button class="btn secondary" onclick="closeModal('cmdModal')">Cancel</button>
+    <button class="btn" onclick="saveCommand()">Save</button>
   </div>
 </div></div>
 
@@ -372,8 +418,134 @@ async function testProvider(id) { try { await postJSON('/api/notifications/provi
 async function delProvider(id) { if (confirm('Delete provider?')) { await delJSON('/api/notifications/providers/' + id); load(); } }
 async function delRule(id) { if (confirm('Delete rule?')) { await delJSON('/api/notifications/rules/' + id); load(); } }
 
+// ---- WhatsApp commands ----
+let CMD = { prefix: '!', commands: [], periods: {}, placeholders: {} }, editingCommand = null, WA_GROUPS = null;
+const OUTCOME = { answered: ['ok', 'answered'], unknown: ['warn', 'unknown'], not_allowed: ['off', 'not allowed here'],
+  too_fast: ['off', 'too fast'], failed: ['bad', 'failed'] };
+
+async function loadCommands() {
+  try { CMD = await getJSON('/api/notifications/commands'); } catch (e) { return; }
+  const pre = document.getElementById('c_prefix');
+  if (document.activeElement !== pre) pre.value = CMD.prefix;
+  document.getElementById('c_example').textContent = CMD.prefix + 'status';
+  const rows = document.getElementById('cmdRows'); rows.innerHTML = '';
+  document.getElementById('cmdEmpty').style.display = CMD.commands.length ? 'none' : 'block';
+  for (const c of CMD.commands) rows.append(el('tr', {},
+    el('td', {}, el('code', {}, CMD.prefix + c.keyword), c.description ? el('div', { class: 'hint' }, c.description) : null),
+    el('td', { class: 'muted' }, c.period === 'hours' ? 'last ' + c.hours + ' h' : c.period === 'today' ? 'today' : 'dashboard counters'),
+    el('td', { class: 'muted' }, (c.group_ids || []).length ? c.group_ids.map(groupName).join(', ') : 'All groups'),
+    el('td', {}, el('span', { class: 'badge ' + (c.enabled ? 'ok' : 'off') }, c.enabled ? 'on' : 'off')),
+    el('td', {}, el('div', { class: 'actions' },
+      el('button', { class: 'btn secondary small', onclick: () => editCommand(c) }, 'Edit'),
+      el('button', { class: 'btn danger small', onclick: () => delCommand(c) }, 'Delete'))),
+  ));
+  let logs = [];
+  try { logs = await getJSON('/api/notifications/commands/log'); } catch (e) { /* ignore */ }
+  const lr = document.getElementById('cmdLogRows'); lr.innerHTML = '';
+  document.getElementById('cmdLogEmpty').style.display = logs.length ? 'none' : 'block';
+  for (const l of logs) {
+    const [cls, text] = OUTCOME[l.outcome] || ['off', l.outcome];
+    lr.append(el('tr', {},
+      el('td', { class: 'muted' }, new Date(l.created_at).toLocaleString()),
+      el('td', {}, l.chat_name || l.chat), el('td', { class: 'muted' }, l.sender || ''),
+      el('td', {}, el('code', {}, l.text)),
+      el('td', {}, el('span', { class: 'badge ' + cls }, text)),
+      el('td', { class: 'muted', style: 'white-space:pre-wrap' }, l.reply || '')));
+  }
+}
+function groupName(id) { const g = (WA_GROUPS || []).find(g => g.id === id); return g ? g.name : id; }
+
+async function savePrefix() {
+  try { await api('PUT', '/api/notifications/commands/prefix', { prefix: document.getElementById('c_prefix').value.trim() }); toast('Prefix saved'); }
+  catch (e) { toast(e.message, true); }
+  loadCommands();
+}
+
+function onPeriod() {
+  document.getElementById('c_hoursBox').style.visibility = document.getElementById('c_period').value === 'hours' ? 'visible' : 'hidden';
+}
+
+async function fillCommandForm(c) {
+  editingCommand = c ? c.id : null;
+  document.getElementById('cmdTitle').textContent = c ? 'Edit command' : 'Add command';
+  document.getElementById('cmdError').style.display = 'none';
+  document.getElementById('c_preview').style.display = 'none';
+  const d = c || { keyword: '', description: '', period: 'dashboard', hours: 8, enabled: true, group_ids: [],
+    header: '📊 {date} {time}', line: '{camera}: {state}, OK {pass} · NOK {fail} · scrap {scrap}', footer: '' };
+  document.getElementById('c_keyword').value = d.keyword;
+  document.getElementById('c_description').value = d.description || '';
+  document.getElementById('c_period').innerHTML = Object.entries(CMD.periods).map(([k, v]) => `<option value="${k}">${v}</option>`).join('');
+  document.getElementById('c_period').value = d.period;
+  document.getElementById('c_hours').value = d.hours || 8;
+  document.getElementById('c_enabled').value = d.enabled ? '1' : '0';
+  document.getElementById('c_header').value = d.header || '';
+  document.getElementById('c_line').value = d.line || '';
+  document.getElementById('c_footer').value = d.footer || '';
+  document.getElementById('c_kwHint').textContent = CMD.prefix + (d.keyword || 'status');
+  document.getElementById('c_placeholders').innerHTML = Object.entries(CMD.placeholders).map(([where, items]) =>
+    `<div><strong>${where}:</strong> ` + Object.entries(items).map(([k, v]) => `<code title="${v}">{${k}}</code>`).join(' ') + '</div>').join('');
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+  document.getElementById('c_tz').textContent = 'Times in the reply use ' + tz + ' (this browser) once saved' +
+    (c && c.timezone !== tz ? '; now ' + c.timezone : '') + '.';
+  onPeriod();
+  const box = document.getElementById('c_groups');
+  box.innerHTML = 'Loading the groups of the linked phone…';
+  if (WA_GROUPS === null) { try { WA_GROUPS = await getJSON('/api/notifications/whatsapp/groups'); } catch (e) { WA_GROUPS = []; } }
+  const chosen = new Set(d.group_ids || []);
+  const groups = [...WA_GROUPS];
+  for (const id of chosen) if (!groups.find(g => g.id === id)) groups.push({ id, name: id });
+  box.innerHTML = '';
+  if (!groups.length) box.append('No groups found: link a phone above to choose groups. Without a choice the command answers in every group.');
+  for (const g of groups) {
+    const cb = el('input', { type: 'checkbox', 'data-group': g.id, style: 'width:auto;margin:0' });
+    cb.checked = chosen.has(g.id);
+    box.append(el('label', { style: 'display:flex;gap:8px;align-items:center;margin:4px 0;font-weight:normal' }, cb, g.name));
+  }
+  if (groups.length) box.append(el('div', { class: 'hint' }, 'None ticked = every group the phone is in.'));
+}
+function commandBody() {
+  return {
+    keyword: document.getElementById('c_keyword').value.trim().toLowerCase(),
+    description: document.getElementById('c_description').value.trim(),
+    period: document.getElementById('c_period').value,
+    hours: parseInt(document.getElementById('c_hours').value, 10) || 8,
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
+    header: document.getElementById('c_header').value,
+    line: document.getElementById('c_line').value,
+    footer: document.getElementById('c_footer').value,
+    group_ids: [...document.querySelectorAll('#c_groups input:checked')].map(i => i.dataset.group),
+    enabled: document.getElementById('c_enabled').value === '1',
+  };
+}
+async function newCommand() { openModal('cmdModal'); await fillCommandForm(null); }
+async function editCommand(c) { openModal('cmdModal'); await fillCommandForm(c); }
+async function saveCommand() {
+  const err = document.getElementById('cmdError'); err.style.display = 'none';
+  try {
+    const body = commandBody();
+    if (editingCommand) await patchJSON('/api/notifications/commands/' + editingCommand, body);
+    else await postJSON('/api/notifications/commands', body);
+    closeModal('cmdModal'); loadCommands();
+  } catch (e) { err.textContent = e.message; err.style.display = 'block'; }
+}
+async function previewCommand() {
+  const out = document.getElementById('c_preview');
+  try {
+    const body = { ...commandBody(), keyword: 'preview', camera: document.getElementById('c_previewCamera').value.trim() };
+    out.textContent = (await postJSON('/api/notifications/commands/preview', body)).reply;
+  } catch (e) { out.textContent = e.message; }
+  out.style.display = 'block';
+}
+async function delCommand(c) {
+  if (!confirm('Delete the command ' + CMD.prefix + c.keyword + '?')) return;
+  try { await delJSON('/api/notifications/commands/' + c.id); } catch (e) { toast(e.message, true); }
+  loadCommands();
+}
+
 load();
 waLoad();
+loadCommands();
 setInterval(load, 8000);
+setInterval(loadCommands, 10000);
 </script>
 {% endblock %}

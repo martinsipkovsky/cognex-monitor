@@ -40,6 +40,8 @@ permissions, and PostgreSQL storage, shipped as a Docker image.
   each with a level (info / warning / alert) and its own destinations:
   WhatsApp sent from your own number (linked device, unofficial), Telegram
   bots, webhooks, Green API or Meta Cloud API.
+- **WhatsApp group commands:** `!status` (or your own commands) in a group
+  answers with live production state, OK / NOK and scrap per camera.
 - **Users and permissions:** login required, with granular permissions per user.
 - **Camera export/import** as JSON, and an admin **Database tab** to move the
   app to another PostgreSQL server.

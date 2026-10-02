@@ -55,6 +55,7 @@ app/
   scrap_stats.py     scrap statistics for a date range, Excel export
   poller.py          background poll loop and one-shot poll
   notifications.py   rule conditions, evaluation, events and routing to providers
+  commands.py        WhatsApp group commands ("!status"): parsing, replies, log
   auth.py            password hashing and signed session cookies
   dependencies.py    login and permission checks
   seed.py            first admin account
@@ -62,7 +63,7 @@ app/
   protocols/         one file per camera protocol
   notifiers/         one file per notification transport (whatsapp, telegram;
                      whatsapp_linked runs the linked-phone client process)
-  routers/           auth, account, users, devices, data, notifications,
+  routers/           auth, account, users, devices, data, notifications, commands,
                      database_admin, backup_admin, pages
   templates/         dark-mode Jinja2 pages
   static/            style.css, app.js

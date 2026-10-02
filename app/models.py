@@ -288,3 +288,47 @@ class NotificationLog(Base):
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, index=True
     )
+
+
+# --------------------------------------------------------------------------- #
+# Chat commands (WhatsApp group messages like "!status", see app.commands)
+# --------------------------------------------------------------------------- #
+
+
+class ChatCommand(Base):
+    __tablename__ = "chat_commands"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    # the word after the prefix, lower case, e.g. "status"
+    keyword: Mapped[str] = mapped_column(String(40), unique=True, index=True)
+    description: Mapped[str] = mapped_column(String(200), default="")
+    # which counts the reply shows: "dashboard" (counters on the dashboard),
+    # "today" (production time today, like Scrap statistics) or "hours"
+    period: Mapped[str] = mapped_column(String(16), default="dashboard")
+    hours: Mapped[int] = mapped_column(Integer, default=8)
+    timezone: Mapped[str] = mapped_column(String(64), default="UTC")
+    # reply = header, one line per camera, footer; {placeholders} are filled in
+    header: Mapped[str] = mapped_column(Text, default="")
+    line: Mapped[str] = mapped_column(Text, default="")
+    footer: Mapped[str] = mapped_column(Text, default="")
+    # group ids ("…@g.us") where the command answers; empty = every group
+    group_ids: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class CommandLog(Base):
+    __tablename__ = "command_logs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    chat: Mapped[str] = mapped_column(String(120))
+    chat_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    sender: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    text: Mapped[str] = mapped_column(Text)
+    keyword: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    # "answered" | "not_allowed" | "unknown" | "failed" | "too_fast"
+    outcome: Mapped[str] = mapped_column(String(16))
+    reply: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, index=True
+    )
