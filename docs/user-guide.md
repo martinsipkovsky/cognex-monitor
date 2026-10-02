@@ -66,8 +66,27 @@ Opening a camera shows an OK/NOK chart over 1 hour, 8 hours, 24 hours or
 
 ## Data tab
 
-Running totals per camera and job, and the raw reading history, as stored in
-the database.
+The Data log page has two tabs. Anyone with the "Browse logged readings and
+counters" permission sees both.
+
+**Counters & readings** shows the running totals per camera and job, and the
+raw reading history, as stored in the database.
+
+**Scrap statistics** shows pass, fail, total parts and scrap % for a date
+range:
+
+- Pick **Today**, **Last 7 days** or **Last 30 days**, or set your own
+  **From** and **To** dates (both days included, up to a year).
+- The figures are shown overall, per camera, per job and per day.
+- **Download Excel** saves an .xlsx file with the same figures as the screen,
+  one sheet each for Overall, Per camera, Per job and Per day.
+
+Parts are counted from the reading history the same way as the camera view's
+OK/NOK chart: the growth of each job's totals between readings. Scrap is
+fail / (pass + fail). Days are calendar days in the time zone of the browser
+you are using. Parts a camera had already counted before the app first saw a
+job are not included, so the figures can be a little lower than the running
+totals.
 
 ## Notifications tab
 

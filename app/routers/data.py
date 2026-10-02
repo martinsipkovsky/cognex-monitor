@@ -5,9 +5,10 @@ from __future__ import annotations
 import datetime as dt
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
-from .. import production
+from .. import production, scrap_stats
 from ..database import get_db
 from ..dependencies import require_permission
 from ..models import CounterState, Device, Reading, User, utcnow
@@ -138,3 +139,43 @@ def readings(
         }
         for r in rows
     ]
+
+
+_MAX_RANGE_DAYS = 366
+
+
+def _scrap_range(start: dt.date, end: dt.date, tz: str | None, db: Session) -> dict:
+    if end < start:
+        raise HTTPException(400, "The To date must not be before the From date")
+    if (end - start).days >= _MAX_RANGE_DAYS:
+        raise HTTPException(400, f"The range may cover at most {_MAX_RANGE_DAYS} days")
+    return scrap_stats.compute(db, start, end, scrap_stats.zone(tz))
+
+
+@router.get("/scrap")
+def scrap(
+    start: dt.date = Query(..., alias="from"),
+    end: dt.date = Query(..., alias="to"),
+    tz: str | None = None,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_permission("view_data")),
+):
+    """Pass/fail/scrap for a date range: overall, per camera, per job, per day."""
+    return _scrap_range(start, end, tz, db)
+
+
+@router.get("/scrap.xlsx")
+def scrap_xlsx(
+    start: dt.date = Query(..., alias="from"),
+    end: dt.date = Query(..., alias="to"),
+    tz: str | None = None,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_permission("view_data")),
+):
+    stats = _scrap_range(start, end, tz, db)
+    name = f"scrap_{stats['from']}_{stats['to']}.xlsx"
+    return Response(
+        scrap_stats.to_xlsx(stats),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{name}"'},
+    )

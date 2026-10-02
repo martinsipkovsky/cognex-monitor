@@ -172,3 +172,12 @@ pre.snippet { background: var(--bg); border: 1px solid var(--border); border-rad
   padding: 9px 12px; border-radius: 8px; font-size: 13px; margin-bottom: 12px; }
 .warnbox { background: rgba(245,158,11,.12); border: 1px solid rgba(245,158,11,.4); color: #fde68a;
   padding: 9px 12px; border-radius: 8px; font-size: 13px; margin-bottom: 12px; }
+
+/* ---- Tabs (Data log) ---- */
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 20px; }
+.tabs button { background: none; border: none; border-bottom: 2px solid transparent; color: var(--text-dim);
+  padding: 9px 14px; font-size: 14px; font-weight: 600; cursor: pointer; margin-bottom: -1px; }
+.tabs button:hover { color: var(--text); }
+.tabs button.on { color: var(--text); border-bottom-color: var(--accent); }
+.daybar { display: flex; height: 8px; background: var(--bg-3); border-radius: 999px; overflow: hidden; min-width: 80px; }
+.daybar > span { display: block; height: 100%; }

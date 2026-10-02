@@ -2,10 +2,16 @@
 {% block title %}Data log · Cognex Monitor{% endblock %}
 {% block content %}
 <div class="toolbar">
-  <div><h1>Data log</h1><p class="lead">Per-job running totals and the raw reading history from the database.</p></div>
+  <div><h1>Data log</h1><p class="lead">Per-job running totals, the raw reading history and scrap statistics from the database.</p></div>
   <select id="deviceFilter" style="max-width:240px" onchange="load()"><option value="">All cameras</option></select>
 </div>
 
+<div class="tabs" id="tabs">
+  <button data-tab="log" class="on">Counters &amp; readings</button>
+  <button data-tab="scrap">Scrap statistics</button>
+</div>
+
+<div id="tab-log">
 <div class="section">
   <h2>Running counters by job</h2>
   <table><thead><tr><th>Camera</th><th>Job</th><th>Pass</th><th>Fail</th><th>Total</th><th>Scrap</th><th>State</th></tr></thead>
@@ -18,6 +24,53 @@
   <table><thead><tr><th>Time</th><th>Camera</th><th>Job</th><th>Raw pass</th><th>Raw fail</th><th>Total pass</th><th>Total fail</th></tr></thead>
   <tbody id="readingRows"></tbody></table>
   <div id="readingEmpty" class="empty" style="display:none">No readings yet.</div>
+</div>
+</div>
+
+<div id="tab-scrap" style="display:none">
+  <div class="card" style="margin-bottom:16px">
+    <div class="row">
+      <div style="flex:0 0 auto">
+        <label style="margin-top:0">Range</label>
+        <div class="seg" id="quick">
+          <button data-days="1">Today</button><button data-days="7" class="on">Last 7 days</button><button data-days="30">Last 30 days</button><button data-days="0">Custom</button>
+        </div>
+      </div>
+      <div style="flex:0 0 160px"><label style="margin-top:0">From</label><input type="date" id="sFrom" /></div>
+      <div style="flex:0 0 160px"><label style="margin-top:0">To</label><input type="date" id="sTo" /></div>
+      <div style="flex:0 0 auto" class="actions">
+        <button class="btn secondary" onclick="loadScrap()">Refresh</button>
+        <button class="btn" id="xlsxBtn" onclick="downloadXlsx()">Download Excel</button>
+      </div>
+    </div>
+    <div class="hint" style="margin-top:8px">Parts are counted from the reading history, like the OK/NOK chart in the camera view. Scrap = fail / (pass + fail). Days follow this browser's time zone (<span id="tzName"></span>).</div>
+  </div>
+  <div id="scrapError" class="error" style="display:none"></div>
+
+  <div class="grid" style="grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); margin-bottom:24px">
+    <div class="card"><div class="muted">Pass</div><div class="stat value pass" id="oPass">—</div></div>
+    <div class="card"><div class="muted">Fail</div><div class="stat value fail" id="oFail">—</div></div>
+    <div class="card"><div class="muted">Total parts</div><div class="stat" id="oTotal">—</div></div>
+    <div class="card"><div class="muted">Scrap</div><div class="stat" id="oScrap">—</div><div class="muted" id="oPeriod"></div></div>
+  </div>
+
+  <div class="section">
+    <h2>Per camera</h2>
+    <table><thead><tr><th>Camera</th><th>Pass</th><th>Fail</th><th>Total</th><th>Scrap</th></tr></thead>
+    <tbody id="camRows"></tbody></table>
+    <div id="camEmpty" class="empty" style="display:none">No cameras configured.</div>
+  </div>
+  <div class="section">
+    <h2>Per job</h2>
+    <table><thead><tr><th>Camera</th><th>Job</th><th>Pass</th><th>Fail</th><th>Total</th><th>Scrap</th></tr></thead>
+    <tbody id="jobRows"></tbody></table>
+    <div id="jobEmpty" class="empty" style="display:none">No parts counted in this range.</div>
+  </div>
+  <div class="section">
+    <h2>Per day</h2>
+    <table><thead><tr><th>Day</th><th>Pass</th><th>Fail</th><th>Total</th><th>Scrap</th><th style="width:30%"></th></tr></thead>
+    <tbody id="dayRows"></tbody></table>
+  </div>
 </div>
 {% endblock %}
 {% block scripts %}
@@ -67,7 +120,99 @@ async function load() {
     ));
   }
 }
-load();
-setInterval(load, 5000);
+// ---- tabs ----
+let TAB = location.hash === '#scrap' ? 'scrap' : 'log';
+let SCRAP_LOADED = false;
+function showTab(t) {
+  TAB = t;
+  document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === t));
+  document.getElementById('tab-log').style.display = t === 'log' ? '' : 'none';
+  document.getElementById('tab-scrap').style.display = t === 'scrap' ? '' : 'none';
+  document.getElementById('deviceFilter').style.visibility = t === 'log' ? '' : 'hidden';
+  history.replaceState(null, '', t === 'scrap' ? '#scrap' : location.pathname);
+  if (t === 'log') load(); else if (!SCRAP_LOADED) loadScrap();
+}
+document.querySelectorAll('#tabs button').forEach(b => b.addEventListener('click', () => showTab(b.dataset.tab)));
+
+// ---- scrap statistics ----
+const TZ = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+document.getElementById('tzName').textContent = TZ;
+function ymd(d) { return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
+function setQuick(days) {
+  document.querySelectorAll('#quick button').forEach(b => b.classList.toggle('on', +b.dataset.days === days));
+  if (!days) return;
+  const to = new Date(), from = new Date();
+  from.setDate(from.getDate() - (days - 1));
+  document.getElementById('sFrom').value = ymd(from);
+  document.getElementById('sTo').value = ymd(to);
+}
+document.querySelectorAll('#quick button').forEach(b => b.addEventListener('click', () => { setQuick(+b.dataset.days); loadScrap(); }));
+['sFrom', 'sTo'].forEach(id => document.getElementById(id).addEventListener('change', () => { setQuick(0); loadScrap(); }));
+
+function rangeQuery() {
+  const f = document.getElementById('sFrom').value, t = document.getElementById('sTo').value;
+  if (!f || !t) throw new Error('Pick both a from and a to date.');
+  return 'from=' + f + '&to=' + t + '&tz=' + encodeURIComponent(TZ);
+}
+function scrapBadge(rate, total) {
+  if (!total) return el('span', { class: 'muted' }, '—');
+  const c = scrapClass(rate);
+  return el('span', { class: 'badge ' + (c === 'pass' ? 'ok' : c === 'warn' ? 'warn' : 'bad') }, fmtPct(rate));
+}
+function numCells(r) {
+  return [el('td', {}, r.pass.toLocaleString()), el('td', {}, r.fail.toLocaleString()),
+          el('td', {}, r.total.toLocaleString()), el('td', {}, scrapBadge(r.scrap_rate, r.total))];
+}
+function fill(id, rows, emptyId, cells) {
+  const tb = document.getElementById(id); tb.innerHTML = '';
+  if (emptyId) document.getElementById(emptyId).style.display = rows.length ? 'none' : 'block';
+  rows.forEach(r => tb.append(el('tr', {}, ...cells(r))));
+}
+async function loadScrap() {
+  const err = document.getElementById('scrapError');
+  let s;
+  try { s = await getJSON('/api/data/scrap?' + rangeQuery()); err.style.display = 'none'; }
+  catch (e) { err.textContent = e.message; err.style.display = 'block'; return; }
+  SCRAP_LOADED = true;
+  const o = s.overall;
+  document.getElementById('oPass').textContent = o.pass.toLocaleString();
+  document.getElementById('oFail').textContent = o.fail.toLocaleString();
+  document.getElementById('oTotal').textContent = o.total.toLocaleString();
+  const os = document.getElementById('oScrap');
+  os.textContent = o.total ? fmtPct(o.scrap_rate) : '—';
+  os.className = 'stat value ' + (o.total ? scrapClass(o.scrap_rate) : '');
+  document.getElementById('oPeriod').textContent = s.from === s.to ? s.from : s.from + ' to ' + s.to;
+  fill('camRows', s.per_camera, 'camEmpty', r => [el('td', {}, r.camera), ...numCells(r)]);
+  fill('jobRows', s.per_job, 'jobEmpty', r => [el('td', {}, r.camera), el('td', {}, r.job), ...numCells(r)]);
+  const maxTotal = Math.max(1, ...s.per_day.map(r => r.total));
+  fill('dayRows', s.per_day.slice().reverse(), null, r => {
+    const bar = el('div', { class: 'daybar', title: r.pass + ' pass / ' + r.fail + ' fail' });
+    bar.append(el('span', { style: 'width:' + (100 * r.pass / maxTotal) + '%;background:var(--ok)' }),
+               el('span', { style: 'width:' + (100 * r.fail / maxTotal) + '%;background:var(--bad)' }));
+    const d = new Date(r.day + 'T00:00:00');
+    return [el('td', {}, d.toLocaleDateString([], { weekday: 'short', year: 'numeric', month: '2-digit', day: '2-digit' })), ...numCells(r), el('td', {}, bar)];
+  });
+}
+async function downloadXlsx() {
+  const btn = document.getElementById('xlsxBtn');
+  btn.disabled = true;
+  try {
+    const resp = await fetch('/api/data/scrap.xlsx?' + rangeQuery());
+    if (!resp.ok) {
+      let m = resp.statusText;
+      try { m = (await resp.json()).detail || m; } catch (e) { /* no body */ }
+      throw new Error(m);
+    }
+    const name = (resp.headers.get('Content-Disposition') || '').match(/filename="([^"]+)"/);
+    const a = el('a', { href: URL.createObjectURL(await resp.blob()), download: name ? name[1] : 'scrap.xlsx' });
+    document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  } catch (e) { toast(e.message, true); }
+  finally { btn.disabled = false; }
+}
+
+setQuick(7);
+showTab(TAB);
+setInterval(() => { if (TAB === 'log') load(); }, 5000);
 </script>
 {% endblock %}
