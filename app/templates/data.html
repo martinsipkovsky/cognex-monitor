@@ -33,7 +33,7 @@
       <div style="flex:0 0 auto">
         <label style="margin-top:0">Range</label>
         <div class="seg" id="quick">
-          <button data-days="1">Today</button><button data-days="7" class="on">Last 7 days</button><button data-days="30">Last 30 days</button><button data-days="0">Custom</button>
+          <button data-range="month" class="on">Current month</button><button data-range="1">Today</button><button data-range="7">Last 7 days</button><button data-range="30">Last 30 days</button><button data-range="custom">Custom</button>
         </div>
       </div>
       <div style="flex:0 0 160px"><label style="margin-top:0">From</label><input type="date" id="sFrom" /></div>
@@ -138,16 +138,17 @@ document.querySelectorAll('#tabs button').forEach(b => b.addEventListener('click
 const TZ = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
 document.getElementById('tzName').textContent = TZ;
 function ymd(d) { return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
-function setQuick(days) {
-  document.querySelectorAll('#quick button').forEach(b => b.classList.toggle('on', +b.dataset.days === days));
-  if (!days) return;
+function setQuick(range) {
+  document.querySelectorAll('#quick button').forEach(b => b.classList.toggle('on', b.dataset.range === range));
+  if (range === 'custom') return;
   const to = new Date(), from = new Date();
-  from.setDate(from.getDate() - (days - 1));
+  if (range === 'month') from.setDate(1);
+  else from.setDate(from.getDate() - (+range - 1));
   document.getElementById('sFrom').value = ymd(from);
   document.getElementById('sTo').value = ymd(to);
 }
-document.querySelectorAll('#quick button').forEach(b => b.addEventListener('click', () => { setQuick(+b.dataset.days); loadScrap(); }));
-['sFrom', 'sTo'].forEach(id => document.getElementById(id).addEventListener('change', () => { setQuick(0); loadScrap(); }));
+document.querySelectorAll('#quick button').forEach(b => b.addEventListener('click', () => { setQuick(b.dataset.range); loadScrap(); }));
+['sFrom', 'sTo'].forEach(id => document.getElementById(id).addEventListener('change', () => { setQuick('custom'); loadScrap(); }));
 
 function rangeQuery() {
   const f = document.getElementById('sFrom').value, t = document.getElementById('sTo').value;
@@ -211,7 +212,7 @@ async function downloadXlsx() {
   finally { btn.disabled = false; }
 }
 
-setQuick(7);
+setQuick('month');
 showTab(TAB);
 setInterval(() => { if (TAB === 'log') load(); }, 5000);
 </script>

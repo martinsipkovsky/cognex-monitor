@@ -75,8 +75,9 @@ raw reading history, as stored in the database.
 **Scrap statistics** shows pass, fail, total parts and scrap % for a date
 range:
 
-- Pick **Today**, **Last 7 days** or **Last 30 days**, or set your own
-  **From** and **To** dates (both days included, up to a year).
+- Pick **Current month** (the default), **Today**, **Last 7 days** or
+  **Last 30 days**, or set your own **From** and **To** dates (both days
+  included, up to a year).
 - The figures are shown overall, per camera, per job and per day.
 - **Download Excel** saves an .xlsx file with the same figures as the screen,
   one sheet each for Overall, Per camera, Per job and Per day.
